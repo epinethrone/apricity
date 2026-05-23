@@ -5,6 +5,7 @@ import base64
 import hashlib
 import json
 import os
+import platform
 import re
 import secrets
 import sqlite3
@@ -16,6 +17,9 @@ from http.cookies import SimpleCookie
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
+
+
+SERVER_STARTED_AT = datetime.now()
 
 
 ROOT = Path(__file__).resolve().parent
@@ -172,6 +176,156 @@ def get_settings_status() -> dict:
     if not creds:
         return {"credentials_configured": False, "username": None}
     return {"credentials_configured": True, "username": creds.get("username")}
+
+
+def _file_size(path: Path) -> int:
+    try:
+        return path.stat().st_size
+    except OSError:
+        return 0
+
+
+def import_palace(payload: dict) -> dict:
+    """Restore drawers + facts from a mempalace-export payload, deduping by content."""
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, dict):
+        raise ValueError("Missing export payload — upload the JSON file produced by Export data.")
+    if data.get("format") != "mempalace-export":
+        raise ValueError("File doesn't look like a MemPalace export (missing format marker).")
+    incoming_drawers = data.get("drawers") or []
+    incoming_facts = data.get("facts") or data.get("triples") or []
+    if not isinstance(incoming_drawers, list) or not isinstance(incoming_facts, list):
+        raise ValueError("Export payload is malformed: drawers/facts must be lists.")
+
+    existing = read_drawers()
+    seen_drawer_keys = {
+        (d.get("wing", ""), d.get("room", ""), (d.get("content") or "").strip())
+        for d in existing
+    }
+
+    added_drawers = 0
+    skipped_drawers = 0
+    drawer_errors: list[dict] = []
+
+    timestamp = datetime.now().isoformat(timespec="seconds")
+
+    for entry in incoming_drawers:
+        if not isinstance(entry, dict):
+            skipped_drawers += 1
+            continue
+        wing = str(entry.get("wing", "")).strip()
+        room = str(entry.get("room", "")).strip()
+        content = str(entry.get("content", "") or "").strip()
+        if not wing or not room or len(content) < 10:
+            skipped_drawers += 1
+            continue
+        if not NAME_RE.match(wing) or not NAME_RE.match(room):
+            skipped_drawers += 1
+            continue
+        key = (wing, room, content)
+        if key in seen_drawer_keys:
+            skipped_drawers += 1
+            continue
+        try:
+            mempalace_add_drawer(
+                wing=wing,
+                room=room,
+                content=content,
+                source_file=f"mempalace-import:{timestamp}",
+            )
+            seen_drawer_keys.add(key)
+            added_drawers += 1
+        except (RuntimeError, ValueError) as exc:
+            drawer_errors.append({"drawer_id": entry.get("drawer_id"), "error": str(exc)})
+
+    existing_triples = read_triples()
+    active_fact_keys = {
+        (t.get("subject"), t.get("predicate"), t.get("object"))
+        for t in existing_triples
+        if not t.get("valid_to")
+    }
+
+    added_facts = 0
+    skipped_facts = 0
+    fact_errors: list[dict] = []
+
+    for entry in incoming_facts:
+        if not isinstance(entry, dict):
+            skipped_facts += 1
+            continue
+        subject = str(entry.get("subject", "")).strip()
+        predicate = str(entry.get("predicate", "")).strip()
+        obj = str(entry.get("object", "")).strip()
+        if not subject or not predicate or not obj:
+            skipped_facts += 1
+            continue
+        key = (subject, predicate, obj)
+        if key in active_fact_keys:
+            skipped_facts += 1
+            continue
+        try:
+            mempalace_kg_add(
+                subject,
+                predicate,
+                obj,
+                valid_from=str(entry.get("valid_from", "")).strip(),
+                source_drawer_id="",
+            )
+            active_fact_keys.add(key)
+            added_facts += 1
+        except (RuntimeError, ValueError) as exc:
+            fact_errors.append({"fact": f"{subject} {predicate} {obj}", "error": str(exc)})
+
+    return {
+        "success": True,
+        "added": {"drawers": added_drawers, "facts": added_facts},
+        "skipped": {"drawers": skipped_drawers, "facts": skipped_facts},
+        "errors": {"drawers": drawer_errors, "facts": fact_errors},
+    }
+
+
+def build_export() -> dict:
+    drawers = read_drawers()
+    triples = read_triples()
+    return {
+        "format": "mempalace-export",
+        "format_version": 1,
+        "exported_at": datetime.now().isoformat(timespec="seconds"),
+        "host": platform.uname().node,
+        "palace_home": str(MEMPALACE_HOME),
+        "counts": {
+            "drawers": len(drawers),
+            "facts": len(triples),
+        },
+        "drawers": drawers,
+        "facts": triples,
+    }
+
+
+def get_system_info() -> dict:
+    uname = platform.uname()
+    palace_bytes = _file_size(PALACE_DB)
+    kg_bytes = _file_size(KG_DB)
+    uptime = datetime.now() - SERVER_STARTED_AT
+    return {
+        "repo_url": "https://github.com/epinethrone/mempalace-frontend",
+        "host": {
+            "name": uname.node,
+            "os": uname.system,
+            "release": uname.release,
+            "arch": uname.machine,
+        },
+        "python": platform.python_version(),
+        "port": int(os.environ.get("PORT", "8765")),
+        "palace_home": str(MEMPALACE_HOME),
+        "db_bytes": {
+            "palace": palace_bytes,
+            "knowledge_graph": kg_bytes,
+            "total": palace_bytes + kg_bytes,
+        },
+        "uptime_seconds": int(uptime.total_seconds()),
+        "started_at": SERVER_STARTED_AT.isoformat(timespec="seconds"),
+    }
 
 
 def update_credentials(payload: dict) -> dict:
@@ -735,6 +889,51 @@ def delete_memories(payload: dict) -> dict:
     return {"success": True, "deleted": len(results), "target": label, "results": results}
 
 
+def rename_scope(payload: dict) -> dict:
+    """Rename a wing or room by updating every drawer under it."""
+    scope = str(payload.get("scope", "")).strip()
+    new_name = str(payload.get("new_name", "")).strip()
+    if not NAME_RE.match(new_name):
+        raise ValueError("New name must start with a letter or number and use only letters, numbers, dots, underscores, or hyphens.")
+
+    drawers = read_drawers()
+
+    if scope == "wing":
+        wing = str(payload.get("wing", "")).strip()
+        if not NAME_RE.match(wing):
+            raise ValueError("Invalid wing.")
+        if wing == new_name:
+            return {"success": True, "renamed": 0, "target": f"wing {wing}", "noop": True}
+        matches = [drawer for drawer in drawers if drawer["wing"] == wing]
+        if not matches:
+            raise ValueError(f"No drawers found in wing {wing}.")
+        results = []
+        for drawer in matches:
+            log_version("rename-before", drawer, note=f"wing {wing} -> {new_name}")
+            result = mempalace_update_drawer(drawer["drawer_id"], wing=new_name)
+            results.append({"drawer_id": drawer["drawer_id"], "result": result})
+        return {"success": True, "renamed": len(results), "target": f"wing {wing} -> {new_name}", "scope": "wing"}
+
+    if scope == "room":
+        wing = str(payload.get("wing", "")).strip()
+        room = str(payload.get("room", "")).strip()
+        if not NAME_RE.match(wing) or not NAME_RE.match(room):
+            raise ValueError("Invalid wing or room.")
+        if room == new_name:
+            return {"success": True, "renamed": 0, "target": f"room {wing}/{room}", "noop": True}
+        matches = [drawer for drawer in drawers if drawer["wing"] == wing and drawer["room"] == room]
+        if not matches:
+            raise ValueError(f"No drawers found in room {wing}/{room}.")
+        results = []
+        for drawer in matches:
+            log_version("rename-before", drawer, note=f"room {wing}/{room} -> {wing}/{new_name}")
+            result = mempalace_update_drawer(drawer["drawer_id"], room=new_name)
+            results.append({"drawer_id": drawer["drawer_id"], "result": result})
+        return {"success": True, "renamed": len(results), "target": f"room {wing}/{room} -> {wing}/{new_name}", "scope": "room"}
+
+    raise ValueError("Rename scope must be wing or room.")
+
+
 def mempalace_kg_add(subject: str, predicate: str, obj: str, *, valid_from: str = "", source_drawer_id: str = "") -> dict:
     code = """
 import json, sys
@@ -1026,6 +1225,12 @@ class Handler(SimpleHTTPRequestHandler):
             if parsed.path == "/api/settings":
                 self.respond_json(get_settings_status())
                 return
+            if parsed.path == "/api/system":
+                self.respond_json(get_system_info())
+                return
+            if parsed.path == "/api/export":
+                self.respond_json(build_export())
+                return
             self.respond_json({"success": False, "error": "Not found"}, status=404)
             return
         super().do_GET()
@@ -1081,6 +1286,12 @@ class Handler(SimpleHTTPRequestHandler):
                 return
             if parsed.path == "/api/delete":
                 self.respond_json(delete_memories(self.read_json()))
+                return
+            if parsed.path == "/api/rename":
+                self.respond_json(rename_scope(self.read_json()))
+                return
+            if parsed.path == "/api/import":
+                self.respond_json(import_palace(self.read_json()))
                 return
             if parsed.path == "/api/facts":
                 self.respond_json(add_fact(self.read_json()), status=201)

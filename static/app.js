@@ -4,12 +4,15 @@ const state = {
   selectedWing: "all",
   selectedRoom: "all",
   selectedDrawerId: null,
-  activeMetric: null,
   deleteRequest: null,
   editDrawerId: null,
   query: "",
   sortBy: "filed-desc",
-  authorFilter: "all",
+  editingWings: false,
+  editingRooms: false,
+  renaming: null,
+  factsView: "list",
+  graphFocus: null,
   draftsCount: 0,
   applyingHash: false,
   factEditing: null,
@@ -23,21 +26,21 @@ const THEME_STORAGE_KEY = "mempalace-theme";
 const els = {
   wingNav: document.querySelector("#wingNav"),
   stats: document.querySelector("#stats"),
-  inventoryTray: document.querySelector("#inventoryTray"),
   drawerList: document.querySelector("#drawerList"),
   drawerCount: document.querySelector("#drawerCount"),
   roomNav: document.querySelector("#roomNav"),
+  roomCount: document.querySelector("#roomCount"),
   detail: document.querySelector("#detail"),
   emptyState: document.querySelector("#emptyState"),
   facts: document.querySelector("#facts"),
+  factsGraph: document.querySelector("#factsGraph"),
+  factsViewList: document.querySelector("#factsViewList"),
+  factsViewGraph: document.querySelector("#factsViewGraph"),
+  footerInfo: document.querySelector("#footerInfo"),
   factCount: document.querySelector("#factCount"),
-  pageTitle: document.querySelector("#pageTitle"),
-  pageSubtitle: document.querySelector("#pageSubtitle"),
   searchInput: document.querySelector("#searchInput"),
   searchHint: document.querySelector("#searchHint"),
-  refreshBtn: document.querySelector("#refreshBtn"),
   sortSelect: document.querySelector("#sortSelect"),
-  authorSelect: document.querySelector("#authorSelect"),
   draftsBtn: document.querySelector("#draftsBtn"),
   draftsBadge: document.querySelector("#draftsBadge"),
   trashBtn: document.querySelector("#trashBtn"),
@@ -48,9 +51,7 @@ const els = {
   writeClose: document.querySelector("#writeClose"),
   writeForm: document.querySelector("#writeForm"),
   writeWing: document.querySelector("#writeWing"),
-  writeWingPicker: document.querySelector("#writeWingPicker"),
   writeRoom: document.querySelector("#writeRoom"),
-  writeRoomPicker: document.querySelector("#writeRoomPicker"),
   writeTitle: document.querySelector("#writeTitle"),
   writeContent: document.querySelector("#writeContent"),
   writeStatus: document.querySelector("#writeStatus"),
@@ -206,6 +207,27 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
+// Acronyms / brand names that should stay all-caps when humanizing slugs.
+const ACRONYM_OVERRIDES = new Set([
+  "ai", "api", "cli", "cpu", "css", "db", "gpu", "ha", "html", "http", "https",
+  "id", "ip", "json", "kg", "mcp", "ml", "os", "pi", "pdf", "ram", "ssh", "ssl",
+  "tcp", "tls", "tv", "ui", "url", "uuid", "vpn", "wifi", "yaml",
+]);
+
+function humanizeName(slug) {
+  const raw = String(slug ?? "").trim();
+  if (!raw) return "";
+  return raw
+    .split(/[-_]+/)
+    .filter(Boolean)
+    .map((part) => {
+      const lower = part.toLowerCase();
+      if (ACRONYM_OVERRIDES.has(lower)) return lower.toUpperCase();
+      return lower.charAt(0).toUpperCase() + lower.slice(1);
+    })
+    .join(" ");
+}
+
 async function copyToClipboard(text) {
   try {
     if (navigator.clipboard) {
@@ -303,8 +325,7 @@ function filteredDrawers() {
       [drawer.title, drawer.content, drawer.wing, drawer.room, drawer.source_file, drawer.drawer_id]
         .map(norm)
         .some((value) => value.includes(q));
-    const authorMatch = state.authorFilter === "all" || (drawer.added_by || "unknown") === state.authorFilter;
-    return wingMatch && roomMatch && queryMatch && authorMatch;
+    return wingMatch && roomMatch && queryMatch;
   });
   drawers = drawers.slice();
   drawers.sort((a, b) => {
@@ -354,12 +375,6 @@ function drawerById(drawerId) {
   return state.palace.drawers.find((drawer) => drawer.drawer_id === drawerId);
 }
 
-function uniqueAuthors() {
-  const set = new Set();
-  state.palace.drawers.forEach((d) => set.add(d.added_by || "unknown"));
-  return [...set].sort();
-}
-
 // ---------- url hash ----------
 function readHash() {
   const hash = window.location.hash.replace(/^#/, "");
@@ -380,7 +395,6 @@ function writeHash() {
   if (state.selectedDrawerId) parts.push(`d=${encodeURIComponent(state.selectedDrawerId)}`);
   if (state.query) parts.push(`q=${encodeURIComponent(state.query)}`);
   if (state.sortBy && state.sortBy !== "filed-desc") parts.push(`s=${encodeURIComponent(state.sortBy)}`);
-  if (state.authorFilter && state.authorFilter !== "all") parts.push(`by=${encodeURIComponent(state.authorFilter)}`);
   const next = parts.length ? "#" + parts.join("&") : window.location.pathname;
   if (window.location.hash !== (next.startsWith("#") ? next : "")) {
     history.replaceState(null, "", next);
@@ -395,7 +409,6 @@ function applyHash() {
   state.selectedDrawerId = hash.d || null;
   state.query = hash.q || "";
   state.sortBy = hash.s || "filed-desc";
-  state.authorFilter = hash.by || "all";
   if (els.searchInput) els.searchInput.value = state.query;
   if (els.sortSelect) els.sortSelect.value = state.sortBy;
   state.applyingHash = false;
@@ -407,6 +420,52 @@ async function loadPalace() {
   reconcileSelection();
   await refreshDraftsCount().catch(() => {});
   render();
+  loadSystemInfo().catch(() => {});
+}
+
+function formatBytes(bytes) {
+  if (!bytes) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value < 10 && unit > 0 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
+}
+
+function formatUptime(seconds) {
+  if (!seconds || seconds < 0) return "—";
+  const d = Math.floor(seconds / 86400);
+  const h = Math.floor((seconds % 86400) / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  if (d) return `${d}d ${h}h`;
+  if (h) return `${h}h ${m}m`;
+  if (m) return `${m}m`;
+  return `${seconds}s`;
+}
+
+async function loadSystemInfo() {
+  if (!els.footerInfo) return;
+  const info = await fetchJson("/api/system");
+  const host = info.host || {};
+  const cells = [
+    ["Host", `${host.name || "—"} · ${host.os || ""} ${host.release || ""}`.trim()],
+    ["Python", info.python || "—"],
+    ["Storage", `${formatBytes(info.db_bytes && info.db_bytes.total)} · port ${info.port}`],
+    ["Uptime", formatUptime(info.uptime_seconds)],
+  ];
+  els.footerInfo.innerHTML = cells
+    .map(
+      ([label, value]) => `
+      <div class="footer-cell">
+        <span class="footer-cell-label">${escapeHtml(label)}</span>
+        <span class="footer-cell-value">${escapeHtml(value)}</span>
+      </div>
+    `,
+    )
+    .join("");
 }
 
 function reconcileSelection() {
@@ -453,127 +512,21 @@ function updateDraftsBadge() {
 function renderStats() {
   const stats = state.palace.stats;
   const items = [
-    ["drawers", "Drawers", stats.drawers, true],
-    ["wings", "Wings", stats.wings, true],
-    ["rooms", "Rooms", stats.rooms, true],
-    ["facts", "Facts", stats.facts, true],
+    ["Memories", stats.drawers],
+    ["Wings", stats.wings],
+    ["Rooms", stats.rooms],
+    ["Facts", stats.facts],
   ];
   els.stats.innerHTML = items
     .map(
-      ([key, label, value, interactive]) => `
-      <button class="stat ${interactive ? "interactive" : "static"} ${state.activeMetric === key ? "active" : ""}" data-metric="${key}" ${interactive ? "" : "disabled"}>
+      ([label, value]) => `
+      <div class="stat">
+        <div class="stat-label">${escapeHtml(label)}</div>
         <div class="stat-value">${value}</div>
-        <div class="stat-label">${label}</div>
-      </button>
+      </div>
     `,
     )
     .join("");
-  els.stats.querySelectorAll("button.interactive").forEach((button) => {
-    button.addEventListener("click", () => {
-      state.activeMetric = state.activeMetric === button.dataset.metric ? null : button.dataset.metric;
-      renderStats();
-      renderInventoryTray();
-    });
-  });
-}
-
-function renderInventoryTray() {
-  if (!state.activeMetric) {
-    els.inventoryTray.classList.add("hidden");
-    els.inventoryTray.innerHTML = "";
-    return;
-  }
-  const metric = state.activeMetric;
-  const titles = { drawers: "All drawers", wings: "Wings", rooms: "Rooms", facts: "Facts" };
-  if (!(metric in titles)) {
-    els.inventoryTray.classList.add("hidden");
-    els.inventoryTray.innerHTML = "";
-    return;
-  }
-  let body = "";
-  if (metric === "drawers") {
-    body = state.palace.drawers
-      .map((d) => `
-        <button class="inventory-chip drawer-chip" data-action="drawer" data-id="${escapeHtml(d.drawer_id)}">
-          <strong>${escapeHtml(d.title)}</strong>
-          <span>${escapeHtml(d.wing)} / ${escapeHtml(d.room)}</span>
-        </button>`)
-      .join("");
-  } else if (metric === "wings") {
-    body = state.palace.wings
-      .map((w) => `
-        <button class="inventory-chip" data-action="wing" data-wing="${escapeHtml(w.name)}">
-          <strong>${escapeHtml(w.name)}</strong>
-          <span>${w.count} drawers · ${w.rooms.length} rooms</span>
-        </button>`)
-      .join("");
-  } else if (metric === "rooms") {
-    body = allRooms()
-      .map((r) => `
-        <button class="inventory-chip" data-action="room" data-wing="${escapeHtml(r.wing)}" data-room="${escapeHtml(r.room)}">
-          <strong>${escapeHtml(r.room)}</strong>
-          <span>${escapeHtml(r.wing)} / ${r.count}</span>
-        </button>`)
-      .join("");
-  } else if (metric === "facts") {
-    body = filteredFacts()
-      .map((fact) => `
-        <button class="inventory-chip fact-chip" data-action="fact" data-id="${escapeHtml(fact.source_drawer_id || "")}" data-query="${escapeHtml(fact.subject)}">
-          <strong>${escapeHtml(fact.subject)}</strong>
-          <span>${escapeHtml(fact.predicate)} → ${escapeHtml(fact.object)}</span>
-        </button>`)
-      .join("");
-  }
-  els.inventoryTray.classList.remove("hidden");
-  els.inventoryTray.innerHTML = `
-    <div class="inventory-header">
-      <div>
-        <h2>${escapeHtml(titles[metric])}</h2>
-        <p>${body ? "Select an item to focus the browser." : "Nothing here yet."}</p>
-      </div>
-      <button class="tray-close" type="button" aria-label="Close inventory">Close</button>
-    </div>
-    <div class="inventory-list">${body || `<div class="empty-list">Nothing here yet.</div>`}</div>
-  `;
-  els.inventoryTray.querySelector(".tray-close").addEventListener("click", () => {
-    state.activeMetric = null;
-    renderStats();
-    renderInventoryTray();
-  });
-  els.inventoryTray.querySelectorAll("[data-action]").forEach((button) => {
-    button.addEventListener("click", () => {
-      const action = button.dataset.action;
-      state.query = "";
-      if (els.searchInput) els.searchInput.value = "";
-      if (action === "room") {
-        state.selectedWing = button.dataset.wing;
-        state.selectedRoom = button.dataset.room;
-        state.selectedDrawerId = null;
-      } else if (action === "wing") {
-        state.selectedWing = button.dataset.wing;
-        state.selectedRoom = "all";
-        state.selectedDrawerId = null;
-      } else if (action === "drawer") {
-        const drawer = drawerById(button.dataset.id);
-        if (drawer) {
-          state.selectedWing = drawer.wing;
-          state.selectedRoom = drawer.room;
-          state.selectedDrawerId = drawer.drawer_id;
-        }
-      } else if (action === "fact") {
-        const drawer = drawerById(button.dataset.id);
-        if (drawer) {
-          state.selectedWing = drawer.wing;
-          state.selectedRoom = drawer.room;
-          state.selectedDrawerId = drawer.drawer_id;
-        } else {
-          state.query = button.dataset.query;
-          els.searchInput.value = state.query;
-        }
-      }
-      render();
-    });
-  });
 }
 
 function dotMenu(menuId, label, items) {
@@ -617,28 +570,101 @@ function deleteMenuItem({ scope, drawerId, wing, room }) {
     </button>`;
 }
 
+function editToggleButton({ id, label, active }) {
+  return `<button class="edit-toggle ${active ? "active" : ""}" id="${escapeHtml(id)}" type="button" aria-pressed="${active ? "true" : "false"}" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M14.06 4.94a2.25 2.25 0 0 1 3.18 0l1.82 1.82a2.25 2.25 0 0 1 0 3.18L9.5 19.5l-4.5 1 1-4.5 8.06-11.06Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+        <path d="m13 6 5 5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+      </svg>
+    </button>`;
+}
+
+function renameIconButton({ scope, wing, room }) {
+  const attrs = [`data-rename-scope="${escapeHtml(scope)}"`];
+  if (wing) attrs.push(`data-wing="${escapeHtml(wing)}"`);
+  if (room) attrs.push(`data-room="${escapeHtml(room)}"`);
+  return `<button class="row-action" type="button" aria-label="Rename" title="Rename" ${attrs.join(" ")}>
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M14.06 4.94a2.25 2.25 0 0 1 3.18 0l1.82 1.82a2.25 2.25 0 0 1 0 3.18L9.5 19.5l-4.5 1 1-4.5 8.06-11.06Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+      </svg>
+    </button>`;
+}
+
+function deleteIconButton({ scope, wing, room }) {
+  const attrs = [`data-delete-scope="${escapeHtml(scope)}"`];
+  if (wing) attrs.push(`data-wing="${escapeHtml(wing)}"`);
+  if (room) attrs.push(`data-room="${escapeHtml(room)}"`);
+  return `<button class="row-action danger" type="button" aria-label="Delete" title="Delete" ${attrs.join(" ")}>
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M5 7h14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" fill="none"/>
+        <path d="M10 7V5.5A1.5 1.5 0 0 1 11.5 4h1A1.5 1.5 0 0 1 14 5.5V7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" fill="none"/>
+        <path d="M7 7h10l-.9 11.2A1.8 1.8 0 0 1 14.3 20H9.7a1.8 1.8 0 0 1-1.8-1.8L7 7Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" fill="none"/>
+      </svg>
+    </button>`;
+}
+
+function renameRow({ scope, currentName, label }) {
+  return `<form class="rename-row" data-rename-form data-rename-scope="${escapeHtml(scope)}" data-current="${escapeHtml(currentName)}">
+      <input class="rename-input" type="text" autocomplete="off" spellcheck="false" value="${escapeHtml(currentName)}" aria-label="${escapeHtml(label)}" required />
+      <button class="row-action accent" type="submit" aria-label="Save">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 5 5 9-11" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <button class="row-action" type="button" data-rename-cancel aria-label="Cancel">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+      </button>
+    </form>`;
+}
+
 function renderNav() {
   const buttons = [{ name: "all", count: state.palace.stats.drawers }, ...state.palace.wings];
-  els.wingNav.innerHTML = buttons
+  const editing = state.editingWings;
+  const editableCount = state.palace.wings.length;
+  const toggle = editableCount
+    ? `<div class="nav-toolbar">
+        <span class="nav-toolbar-label">${editing ? "Editing wings" : "Wings"}</span>
+        ${editToggleButton({ id: "wingEditToggle", label: editing ? "Done" : "Edit wings", active: editing })}
+      </div>`
+    : "";
+  els.wingNav.classList.toggle("editing", editing);
+  els.wingNav.innerHTML = toggle + buttons
     .map((wing) => {
       const active = state.selectedWing === wing.name ? "active" : "";
-      const label = wing.name === "all" ? "All Memory" : wing.name;
-      const menu = wing.name === "all"
-        ? ""
-        : dotMenu(`wing-${wing.name}`, `Actions for ${label}`, [
-            deleteMenuItem({ scope: "wing", wing: wing.name }),
-          ]);
+      const label = wing.name === "all" ? "All Memory" : humanizeName(wing.name);
+      const isRenaming =
+        state.renaming &&
+        state.renaming.scope === "wing" &&
+        state.renaming.wing === wing.name;
+      if (isRenaming) {
+        return `<div class="nav-row ${active} renaming" data-wing-row="${escapeHtml(wing.name)}">
+          ${renameRow({ scope: "wing", currentName: wing.name, label: `Rename wing ${wing.name}` })}
+        </div>`;
+      }
+      const actions = editing && wing.name !== "all"
+        ? `<div class="row-actions">
+            ${renameIconButton({ scope: "wing", wing: wing.name })}
+            ${deleteIconButton({ scope: "wing", wing: wing.name })}
+          </div>`
+        : "";
       return `<div class="nav-row ${active}" data-wing-row="${escapeHtml(wing.name)}">
-        <button class="nav-item" type="button" data-wing="${escapeHtml(wing.name)}">
+        <button class="nav-item" type="button" data-wing="${escapeHtml(wing.name)}" ${editing && wing.name !== "all" ? "disabled" : ""}>
           <span>${escapeHtml(label)}</span>
           <strong>${wing.count}</strong>
         </button>
-        ${menu}
+        ${actions}
       </div>`;
     })
     .join("");
+  const toggleBtn = document.querySelector("#wingEditToggle");
+  if (toggleBtn) {
+    toggleBtn.addEventListener("click", () => {
+      state.editingWings = !state.editingWings;
+      state.renaming = null;
+      render();
+    });
+  }
   els.wingNav.querySelectorAll(".nav-item").forEach((button) => {
     button.addEventListener("click", () => {
+      if (button.disabled) return;
       state.selectedWing = button.dataset.wing;
       state.selectedRoom = "all";
       state.selectedDrawerId = null;
@@ -654,29 +680,64 @@ function renderRooms(drawers) {
   }, new Map());
   const rooms = [...roomCounts.entries()].sort(([a], [b]) => a.localeCompare(b));
   const allActive = state.selectedRoom === "all" ? "active" : "";
-  els.roomNav.innerHTML = [
-    `<button class="room-item ${allActive}" type="button" data-room="all">
-      <span>All rooms</span>
-      <strong>${drawers.length}</strong>
-    </button>`,
-    ...rooms.map(([room, count]) => {
-      const active = state.selectedRoom === room ? "active" : "";
-      const menu = state.selectedWing === "all"
-        ? ""
-        : dotMenu(`room-${state.selectedWing}-${room}`, `Actions for ${room}`, [
-            deleteMenuItem({ scope: "room", wing: state.selectedWing, room }),
-          ]);
-      return `<div class="room-row ${active}">
-        <button class="room-item" type="button" data-room="${escapeHtml(room)}">
-          <span>${escapeHtml(room)}</span>
-          <strong>${count}</strong>
-        </button>
-        ${menu}
-      </div>`;
-    }),
-  ].join("");
+  if (els.roomCount) {
+    els.roomCount.textContent = `${rooms.length} ${rooms.length === 1 ? "room" : "rooms"}`;
+  }
+  const canEdit = state.selectedWing !== "all" && rooms.length > 0;
+  if (!canEdit && state.editingRooms) state.editingRooms = false;
+  const editing = state.editingRooms;
+  const toggle = canEdit
+    ? `<div class="nav-toolbar room-toolbar">
+        <span class="nav-toolbar-label">${editing ? "Editing rooms" : ""}</span>
+        ${editToggleButton({ id: "roomEditToggle", label: editing ? "Done" : "Edit rooms", active: editing })}
+      </div>`
+    : "";
+  els.roomNav.classList.toggle("editing", editing);
+  els.roomNav.innerHTML =
+    toggle +
+    [
+      `<button class="room-item ${allActive}" type="button" data-room="all" ${editing ? "disabled" : ""}>
+        <span>All rooms</span>
+        <strong>${drawers.length}</strong>
+      </button>`,
+      ...rooms.map(([room, count]) => {
+        const active = state.selectedRoom === room ? "active" : "";
+        const isRenaming =
+          state.renaming &&
+          state.renaming.scope === "room" &&
+          state.renaming.wing === state.selectedWing &&
+          state.renaming.room === room;
+        if (isRenaming) {
+          return `<div class="room-row ${active} renaming">
+            ${renameRow({ scope: "room", currentName: room, label: `Rename room ${room}` })}
+          </div>`;
+        }
+        const actions = editing
+          ? `<div class="row-actions">
+              ${renameIconButton({ scope: "room", wing: state.selectedWing, room })}
+              ${deleteIconButton({ scope: "room", wing: state.selectedWing, room })}
+            </div>`
+          : "";
+        return `<div class="room-row ${active}">
+          <button class="room-item" type="button" data-room="${escapeHtml(room)}" ${editing ? "disabled" : ""}>
+            <span>${escapeHtml(humanizeName(room))}</span>
+            <strong>${count}</strong>
+          </button>
+          ${actions}
+        </div>`;
+      }),
+    ].join("");
+  const roomToggleBtn = document.querySelector("#roomEditToggle");
+  if (roomToggleBtn) {
+    roomToggleBtn.addEventListener("click", () => {
+      state.editingRooms = !state.editingRooms;
+      state.renaming = null;
+      render();
+    });
+  }
   els.roomNav.querySelectorAll(".room-item").forEach((button) => {
     button.addEventListener("click", () => {
+      if (button.disabled) return;
       state.selectedRoom = button.dataset.room;
       state.selectedDrawerId = null;
       render();
@@ -695,16 +756,6 @@ function renderDrawers() {
     (drawer) => state.selectedWing === "all" || drawer.wing === state.selectedWing,
   );
   renderRooms(allForWing);
-
-  // populate author select (state.authorFilter is the source of truth)
-  const authors = uniqueAuthors();
-  els.authorSelect.innerHTML =
-    `<option value="all">All</option>` +
-    authors.map((a) => `<option value="${escapeHtml(a)}">${escapeHtml(a)}</option>`).join("");
-  if (state.authorFilter !== "all" && !authors.includes(state.authorFilter)) {
-    state.authorFilter = "all";
-  }
-  els.authorSelect.value = state.authorFilter;
 
   const drawers = filteredDrawers();
   els.drawerCount.textContent = `${drawers.length} visible`;
@@ -729,7 +780,7 @@ function renderDrawers() {
       return `<div class="drawer-card ${active}" data-id="${escapeHtml(drawer.drawer_id)}">
         <button class="drawer-select" type="button" data-id="${escapeHtml(drawer.drawer_id)}">
           <span class="drawer-kicker">
-            <span>${escapeHtml(drawer.wing)} / ${escapeHtml(drawer.room)}</span>
+            <span>${escapeHtml(humanizeName(drawer.wing))} / ${escapeHtml(humanizeName(drawer.room))}</span>
             ${date ? `<span class="drawer-date">${escapeHtml(date)}</span>` : ""}
           </span>
           <strong>${escapeHtml(drawer.title)}</strong>
@@ -762,8 +813,8 @@ function renderDetail() {
   els.detail.classList.remove("hidden");
   const metadata = [
     ["Drawer", drawer.drawer_id],
-    ["Wing", drawer.wing],
-    ["Room", drawer.room],
+    ["Wing", humanizeName(drawer.wing)],
+    ["Room", humanizeName(drawer.room)],
     ["Source", drawer.source_file],
     ["Filed", drawer.filed_at],
     ["Added by", drawer.added_by],
@@ -815,6 +866,19 @@ function renderDetail() {
 function renderFacts() {
   const facts = filteredFacts();
   els.factCount.textContent = `${facts.length} visible`;
+  if (els.factsViewList && els.factsViewGraph) {
+    const isGraph = state.factsView === "graph";
+    els.factsViewList.classList.toggle("active", !isGraph);
+    els.factsViewGraph.classList.toggle("active", isGraph);
+    els.factsViewList.setAttribute("aria-selected", String(!isGraph));
+    els.factsViewGraph.setAttribute("aria-selected", String(isGraph));
+    els.facts.classList.toggle("hidden", isGraph);
+    if (els.factsGraph) els.factsGraph.classList.toggle("hidden", !isGraph);
+  }
+  if (state.factsView === "graph") {
+    renderFactsGraph(facts);
+    return;
+  }
   if (!facts.length) {
     els.facts.innerHTML = `<div class="empty-list">No facts match the current filters.</div>`;
     return;
@@ -848,20 +912,635 @@ function renderFacts() {
   });
 }
 
-function renderTitle() {
-  const wing = state.selectedWing === "all" ? "Palace" : state.selectedWing;
-  els.pageTitle.textContent = wing;
-  els.pageSubtitle.textContent =
-    state.selectedWing === "all"
-      ? "Local memory — browse, edit, prune."
-      : "Browse drawers and graph facts in this wing.";
+// ---------- knowledge graph viz ----------
+function shortenGraphLabel(value, max = 22) {
+  const s = String(value ?? "");
+  if (s.length <= max) return s;
+  return s.slice(0, max - 1) + "…";
+}
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+// Cluster palette — muted, distinct, dark-mode friendly. Cycled if needed.
+const KG_CLUSTER_COLORS = [
+  "#5fa9d0", // soft blue
+  "#e6916a", // warm peach
+  "#7dd394", // mint
+  "#b89df1", // lavender
+  "#f4cc6c", // pale gold
+  "#ee87a8", // soft pink
+  "#7bd0d5", // pale teal
+  "#c98ac9", // mauve
+];
+
+const kg = {
+  // lifecycle
+  mounted: false,
+  container: null,
+  svg: null,
+  edgesG: null,
+  nodesG: null,
+  hint: null,
+  legend: null,
+  legendText: null,
+  resetBtn: null,
+
+  // data
+  nodes: [],
+  edges: [],
+  byId: new Map(),
+  signature: "",
+  zoomedIn: false,
+
+  // view (overwritten in kgRecomputeBase based on actual SVG aspect)
+  baseW: 2200,
+  baseH: 1100,
+  view: { x: 0, y: 0, w: 2200, h: 1100 },
+
+  // simulation
+  alpha: 0,
+  alphaDecay: 0.0228,
+  alphaMin: 0.0015,
+  raf: null,
+
+  // interaction
+  focus: null,
+  hover: null,
+  drag: null,   // { node, dx, dy, moved }
+  pan: null,    // { sx, sy, viewX, viewY }
+};
+
+function kgBuildGraph(facts) {
+  const active = facts.filter((f) => !f.valid_to);
+  const byId = new Map();
+  const addNode = (id) => {
+    let n = byId.get(id);
+    if (!n) {
+      n = { id, label: shortenGraphLabel(id), full: id, degree: 0, x: 0, y: 0, vx: 0, vy: 0 };
+      byId.set(id, n);
+    }
+    return n;
+  };
+  const edges = active.map((fact) => {
+    const source = addNode(fact.subject);
+    const target = addNode(fact.object);
+    source.degree += 1;
+    target.degree += 1;
+    return {
+      source,
+      target,
+      label: shortenGraphLabel(fact.predicate, 18),
+      full: fact.predicate,
+    };
+  });
+  const nodes = [...byId.values()];
+
+  // Hubs = top nodes by degree; they're the labelled landmarks.
+  const sortedByDegree = [...nodes].sort((a, b) => b.degree - a.degree);
+  const hubCount = Math.min(6, Math.max(1, Math.round(nodes.length * 0.18)));
+  const hubs = [];
+  sortedByDegree.forEach((n, i) => {
+    n.isHub = i < hubCount;
+    if (n.isHub) hubs.push(n);
+  });
+
+  // Multi-source BFS — each node inherits the cluster of the closest hub.
+  const adj = new Map();
+  nodes.forEach((n) => adj.set(n.id, []));
+  edges.forEach((e) => {
+    adj.get(e.source.id).push(e.target.id);
+    adj.get(e.target.id).push(e.source.id);
+  });
+  const cluster = new Map();
+  const queue = [];
+  hubs.forEach((hub, idx) => {
+    hub.cluster = idx;
+    cluster.set(hub.id, idx);
+    queue.push(hub.id);
+  });
+  while (queue.length) {
+    const id = queue.shift();
+    const c = cluster.get(id);
+    for (const nbr of adj.get(id) || []) {
+      if (!cluster.has(nbr)) {
+        cluster.set(nbr, c);
+        queue.push(nbr);
+      }
+    }
+  }
+  nodes.forEach((n) => {
+    n.cluster = cluster.has(n.id) ? cluster.get(n.id) : 0;
+    n.color = KG_CLUSTER_COLORS[n.cluster % KG_CLUSTER_COLORS.length];
+  });
+  edges.forEach((e) => {
+    e.intra = e.source.cluster === e.target.cluster;
+    e.color = e.intra
+      ? KG_CLUSTER_COLORS[e.source.cluster % KG_CLUSTER_COLORS.length]
+      : null;
+  });
+
+  // Seed positions: jittered ring around viewBox center for organic entry.
+  const cx = kg.baseW / 2;
+  const cy = kg.baseH / 2;
+  const radius = Math.max(260, Math.min(640, 160 + nodes.length * 14));
+  nodes.forEach((n, i) => {
+    const angle = (i / Math.max(1, nodes.length)) * Math.PI * 2 + Math.random() * 0.4;
+    const r = radius * (0.5 + Math.random() * 0.5);
+    n.x = cx + Math.cos(angle) * r;
+    n.y = cy + Math.sin(angle) * r;
+    n.vx = 0;
+    n.vy = 0;
+    n.radius = Math.min(48, 22 + Math.sqrt(n.degree) * 7);
+  });
+  return { nodes, edges, byId };
+}
+
+function kgSignature(facts) {
+  return facts.filter((f) => !f.valid_to).map((f) => `${f.subject}|${f.predicate}|${f.object}`).sort().join("\n");
+}
+
+function svgEl(tag, attrs = {}) {
+  const el = document.createElementNS(SVG_NS, tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (v == null) continue;
+    el.setAttribute(k, v);
+  }
+  return el;
+}
+
+function kgRecomputeBase() {
+  if (!kg.svg) return false;
+  const rect = kg.svg.getBoundingClientRect();
+  if (rect.width < 50 || rect.height < 50) return false;
+  const aspect = rect.width / rect.height;
+  // Keep the layout "area" stable so node density is consistent across screen sizes.
+  const area = 2_600_000;
+  const baseH = Math.sqrt(area / aspect);
+  const baseW = baseH * aspect;
+  const w = Math.round(baseW);
+  const h = Math.round(baseH);
+  if (w === kg.baseW && h === kg.baseH) return false;
+  // Scale existing positions so nodes don't get clipped after resize.
+  if (kg.nodes && kg.nodes.length && kg.baseW && kg.baseH) {
+    const sx = w / kg.baseW;
+    const sy = h / kg.baseH;
+    kg.nodes.forEach((n) => {
+      n.x *= sx;
+      n.y *= sy;
+    });
+  }
+  kg.baseW = w;
+  kg.baseH = h;
+  kg.view = { x: 0, y: 0, w, h };
+  kgApplyView();
+  return true;
+}
+
+function kgEnsureMount(container) {
+  if (kg.mounted && kg.container === container) return;
+  // (Re)create scaffold
+  container.innerHTML = "";
+  const wrap = document.createElement("div");
+  wrap.className = "kg-graph-wrap";
+
+  const stage = document.createElement("div");
+  stage.className = "kg-stage";
+  const svg = svgEl("svg", {
+    class: "kg-svg",
+    viewBox: `${kg.view.x} ${kg.view.y} ${kg.view.w} ${kg.view.h}`,
+    preserveAspectRatio: "xMidYMid meet",
+    role: "img",
+    "aria-label": "Knowledge graph",
+  });
+
+  // defs: radial gradient for nodes + soft glow
+  const defs = svgEl("defs");
+  const grad = svgEl("radialGradient", { id: "kgNodeGrad", cx: "30%", cy: "30%", r: "70%" });
+  const s1 = svgEl("stop", { offset: "0%", "stop-color": "rgba(255,255,255,0.16)" });
+  const s2 = svgEl("stop", { offset: "100%", "stop-color": "rgba(255,255,255,0)" });
+  grad.append(s1, s2);
+  const focusGrad = svgEl("radialGradient", { id: "kgFocusGrad", cx: "30%", cy: "30%", r: "75%" });
+  const f1 = svgEl("stop", { offset: "0%", "stop-color": "rgba(255,255,255,0.34)" });
+  const f2 = svgEl("stop", { offset: "100%", "stop-color": "rgba(255,255,255,0)" });
+  focusGrad.append(f1, f2);
+  const glow = svgEl("filter", { id: "kgGlow", x: "-50%", y: "-50%", width: "200%", height: "200%" });
+  const blur = svgEl("feGaussianBlur", { in: "SourceGraphic", stdDeviation: "8" });
+  glow.append(blur);
+  defs.append(grad, focusGrad, glow);
+  svg.appendChild(defs);
+
+  const edgesG = svgEl("g", { class: "kg-edges" });
+  const nodesG = svgEl("g", { class: "kg-nodes" });
+  svg.append(edgesG, nodesG);
+  stage.appendChild(svg);
+  wrap.appendChild(stage);
+
+  const hint = document.createElement("div");
+  hint.className = "kg-hint";
+  hint.textContent = "Click a node to focus · drag to reposition · scroll to zoom · double-click to reset";
+  wrap.appendChild(hint);
+
+  const legend = document.createElement("div");
+  legend.className = "kg-legend";
+  const legendText = document.createElement("span");
+  const resetBtn = document.createElement("button");
+  resetBtn.type = "button";
+  resetBtn.className = "kg-reset hidden";
+  resetBtn.textContent = "Reset view";
+  legend.append(legendText, resetBtn);
+  wrap.appendChild(legend);
+
+  container.appendChild(wrap);
+
+  kg.container = container;
+  kg.svg = svg;
+  kg.edgesG = edgesG;
+  kg.nodesG = nodesG;
+  kg.hint = hint;
+  kg.legend = legend;
+  kg.legendText = legendText;
+  kg.resetBtn = resetBtn;
+
+  // ----- events -----
+  svg.addEventListener("pointerdown", kgOnPointerDown);
+  svg.addEventListener("pointermove", kgOnPointerMove);
+  svg.addEventListener("pointerup", kgOnPointerUp);
+  svg.addEventListener("pointercancel", kgOnPointerUp);
+  svg.addEventListener("wheel", kgOnWheel, { passive: false });
+  svg.addEventListener("dblclick", (event) => {
+    if (event.target.closest(".kg-node")) return;
+    event.preventDefault();
+    kg.view = { x: 0, y: 0, w: kg.baseW, h: kg.baseH };
+    kg.focus = null;
+    kgApplyView();
+    kgUpdateClasses();
+    kgKick(0.6);
+  });
+
+  resetBtn.addEventListener("click", () => {
+    kg.view = { x: 0, y: 0, w: kg.baseW, h: kg.baseH };
+    kg.focus = null;
+    kgApplyView();
+    kgUpdateClasses();
+    kgUpdateLegend();
+    kgKick(0.5);
+  });
+
+  kg.mounted = true;
+
+  // Adapt the viewBox to the actual SVG aspect ratio, then again on resize.
+  requestAnimationFrame(() => kgRecomputeBase());
+  if (typeof ResizeObserver !== "undefined") {
+    if (kg._ro) kg._ro.disconnect();
+    kg._ro = new ResizeObserver(() => {
+      if (kgRecomputeBase()) kgKick(0.4);
+    });
+    kg._ro.observe(svg);
+  }
+}
+
+function kgBuildDom() {
+  // Build edge and node DOM, cache refs on objects.
+  kg.edgesG.innerHTML = "";
+  kg.nodesG.innerHTML = "";
+
+  kg.edges.forEach((e) => {
+    const lineClass = "kg-edge " + (e.intra ? "intra" : "bridge");
+    const lineAttrs = { class: lineClass, "stroke-linecap": "round" };
+    if (e.intra && e.color) lineAttrs.style = `--kg-color: ${e.color};`;
+    const line = svgEl("line", lineAttrs);
+    const label = svgEl("text", {
+      class: "kg-edge-label",
+      "text-anchor": "middle",
+    });
+    label.textContent = e.label;
+    const titleEl = svgEl("title");
+    titleEl.textContent = e.full;
+    label.appendChild(titleEl);
+    kg.edgesG.append(line, label);
+    e._line = line;
+    e._label = label;
+  });
+
+  kg.nodes.forEach((n) => {
+    const g = svgEl("g", { class: "kg-node", style: `--kg-color: ${n.color};` });
+    g.dataset.id = n.id;
+    const ring = svgEl("circle", { class: "kg-node-ring", r: (n.radius + 6).toFixed(1) });
+    const halo = svgEl("circle", { class: "kg-node-halo", r: (n.radius + 14).toFixed(1) });
+    const circle = svgEl("circle", { class: "kg-node-fill", r: n.radius.toFixed(1) });
+    const overlay = svgEl("circle", { class: "kg-node-overlay", r: n.radius.toFixed(1), fill: "url(#kgNodeGrad)" });
+    const label = svgEl("text", {
+      class: "kg-node-label",
+      "text-anchor": "middle",
+      dy: (n.radius + 26).toFixed(1),
+    });
+    label.textContent = n.label;
+    const title = svgEl("title");
+    title.textContent = n.full;
+    g.append(title, halo, ring, circle, overlay, label);
+
+    g.addEventListener("pointerenter", () => {
+      kg.hover = n.id;
+      kgUpdateClasses();
+    });
+    g.addEventListener("pointerleave", () => {
+      if (kg.hover === n.id) {
+        kg.hover = null;
+        kgUpdateClasses();
+      }
+    });
+
+    kg.nodesG.appendChild(g);
+    n._g = g;
+    n._ring = ring;
+    n._halo = halo;
+    n._fill = circle;
+    n._label = label;
+  });
+}
+
+function kgUpdateLegend() {
+  if (!kg.legendText) return;
+  const n = kg.nodes.length;
+  const e = kg.edges.length;
+  kg.legendText.textContent = `${n} node${n === 1 ? "" : "s"} · ${e} edge${e === 1 ? "" : "s"}`;
+  const customView = kg.view.x !== 0 || kg.view.y !== 0 || kg.view.w !== kg.baseW || kg.view.h !== kg.baseH;
+  kg.resetBtn.classList.toggle("hidden", !customView && !kg.focus);
+}
+
+function kgUpdateClasses() {
+  const focus = kg.focus;
+  const hover = kg.hover;
+  const highlightId = focus || hover;
+  const connected = new Set();
+  if (highlightId) {
+    connected.add(highlightId);
+    kg.edges.forEach((e) => {
+      if (e.source.id === highlightId) connected.add(e.target.id);
+      if (e.target.id === highlightId) connected.add(e.source.id);
+    });
+  }
+  kg.nodes.forEach((n) => {
+    n._g.classList.toggle("focus", focus === n.id);
+    n._g.classList.toggle("hover", hover === n.id);
+    n._g.classList.toggle("connected", !!highlightId && connected.has(n.id) && highlightId !== n.id);
+    n._g.classList.toggle("dim", !!highlightId && !connected.has(n.id));
+    n._g.classList.toggle("hub", !!n.isHub);
+  });
+  kg.edges.forEach((e) => {
+    const touches = highlightId && (e.source.id === highlightId || e.target.id === highlightId);
+    e._line.classList.toggle("highlight", !!touches);
+    e._line.classList.toggle("dim", !!highlightId && !touches);
+    e._label.classList.toggle("highlight", !!touches);
+    e._label.classList.toggle("dim", !!highlightId && !touches);
+  });
+  kgUpdateLegend();
+}
+
+function kgApplyView() {
+  if (!kg.svg) return;
+  kg.svg.setAttribute("viewBox", `${kg.view.x.toFixed(1)} ${kg.view.y.toFixed(1)} ${kg.view.w.toFixed(1)} ${kg.view.h.toFixed(1)}`);
+  // Reveal every label once the user is zoomed in past ~33% of the base view.
+  const zoomedIn = kg.view.w < kg.baseW * 0.66;
+  if (zoomedIn !== kg.zoomedIn) {
+    kg.zoomedIn = zoomedIn;
+    kg.svg.classList.toggle("kg-zoomed", zoomedIn);
+  }
+}
+
+function kgRenderFrame() {
+  kg.nodes.forEach((n) => {
+    n._g.setAttribute("transform", `translate(${n.x.toFixed(2)},${n.y.toFixed(2)})`);
+  });
+  kg.edges.forEach((e) => {
+    e._line.setAttribute("x1", e.source.x.toFixed(2));
+    e._line.setAttribute("y1", e.source.y.toFixed(2));
+    e._line.setAttribute("x2", e.target.x.toFixed(2));
+    e._line.setAttribute("y2", e.target.y.toFixed(2));
+    e._label.setAttribute("x", ((e.source.x + e.target.x) / 2).toFixed(2));
+    e._label.setAttribute("y", ((e.source.y + e.target.y) / 2 - 4).toFixed(2));
+  });
+}
+
+function kgStep() {
+  const nodes = kg.nodes;
+  const edges = kg.edges;
+  const cx = kg.baseW / 2;
+  const cy = kg.baseH / 2;
+  const idealLength = 320;
+  const repulsion = 22000;
+  const gravity = 0.0045;
+  const damping = 0.72;
+
+  // Repulsion (O(n²) — fine for our sizes).
+  for (let i = 0; i < nodes.length; i++) {
+    const a = nodes[i];
+    for (let j = i + 1; j < nodes.length; j++) {
+      const b = nodes[j];
+      let dx = b.x - a.x;
+      let dy = b.y - a.y;
+      let d2 = dx * dx + dy * dy;
+      if (d2 < 1) {
+        dx = (Math.random() - 0.5) * 4;
+        dy = (Math.random() - 0.5) * 4;
+        d2 = dx * dx + dy * dy + 1;
+      }
+      const d = Math.sqrt(d2);
+      const f = (repulsion / d2) * kg.alpha;
+      const fx = (dx / d) * f;
+      const fy = (dy / d) * f;
+      a.vx -= fx;
+      a.vy -= fy;
+      b.vx += fx;
+      b.vy += fy;
+    }
+  }
+
+  // Springs.
+  for (const e of edges) {
+    const dx = e.target.x - e.source.x;
+    const dy = e.target.y - e.source.y;
+    const d = Math.sqrt(dx * dx + dy * dy) || 0.01;
+    const displacement = d - idealLength;
+    const f = displacement * 0.08 * kg.alpha;
+    const fx = (dx / d) * f;
+    const fy = (dy / d) * f;
+    e.source.vx += fx;
+    e.source.vy += fy;
+    e.target.vx -= fx;
+    e.target.vy -= fy;
+  }
+
+  // Gravity toward center.
+  for (const n of nodes) {
+    n.vx += (cx - n.x) * gravity * kg.alpha;
+    n.vy += (cy - n.y) * gravity * kg.alpha;
+  }
+
+  // Integrate.
+  for (const n of nodes) {
+    if (n.fixed) {
+      n.vx = 0;
+      n.vy = 0;
+      continue;
+    }
+    n.vx *= damping;
+    n.vy *= damping;
+    n.x += n.vx;
+    n.y += n.vy;
+    // Keep within roomy bounds so the view doesn't drift off.
+    const m = 60;
+    if (n.x < m) { n.x = m; n.vx *= -0.3; }
+    if (n.x > kg.baseW - m) { n.x = kg.baseW - m; n.vx *= -0.3; }
+    if (n.y < m) { n.y = m; n.vy *= -0.3; }
+    if (n.y > kg.baseH - m) { n.y = kg.baseH - m; n.vy *= -0.3; }
+  }
+}
+
+function kgTick() {
+  // Run a couple of physics sub-steps per frame for snappier convergence.
+  kgStep();
+  kgStep();
+  kg.alpha += (0 - kg.alpha) * kg.alphaDecay;
+  kgRenderFrame();
+  if (kg.alpha > kg.alphaMin || kg.drag) {
+    kg.raf = requestAnimationFrame(kgTick);
+  } else {
+    kg.raf = null;
+  }
+}
+
+function kgKick(value = 1) {
+  kg.alpha = Math.max(kg.alpha, value);
+  if (!kg.raf) kg.raf = requestAnimationFrame(kgTick);
+}
+
+function kgClientToView(event) {
+  const rect = kg.svg.getBoundingClientRect();
+  const x = kg.view.x + ((event.clientX - rect.left) / rect.width) * kg.view.w;
+  const y = kg.view.y + ((event.clientY - rect.top) / rect.height) * kg.view.h;
+  return { x, y };
+}
+
+function kgOnPointerDown(event) {
+  if (event.button && event.button !== 0) return;
+  kg.svg.setPointerCapture(event.pointerId);
+  const targetG = event.target.closest(".kg-node");
+  const pt = kgClientToView(event);
+  if (targetG) {
+    const node = kg.nodes.find((n) => n.id === targetG.dataset.id);
+    if (node) {
+      node.fixed = true;
+      kg.drag = { node, dx: node.x - pt.x, dy: node.y - pt.y, moved: false };
+      kg.svg.classList.add("kg-dragging");
+      kgKick(0.4);
+      event.preventDefault();
+      return;
+    }
+  }
+  kg.pan = { sx: event.clientX, sy: event.clientY, viewX: kg.view.x, viewY: kg.view.y };
+  kg.svg.classList.add("kg-panning");
+}
+
+function kgOnPointerMove(event) {
+  if (kg.drag) {
+    const pt = kgClientToView(event);
+    kg.drag.node.x = pt.x + kg.drag.dx;
+    kg.drag.node.y = pt.y + kg.drag.dy;
+    kg.drag.moved = true;
+    kgRenderFrame();
+    return;
+  }
+  if (kg.pan) {
+    const rect = kg.svg.getBoundingClientRect();
+    const scaleX = kg.view.w / rect.width;
+    const scaleY = kg.view.h / rect.height;
+    kg.view.x = kg.pan.viewX - (event.clientX - kg.pan.sx) * scaleX;
+    kg.view.y = kg.pan.viewY - (event.clientY - kg.pan.sy) * scaleY;
+    kgApplyView();
+    kgUpdateLegend();
+  }
+}
+
+function kgOnPointerUp(event) {
+  try { kg.svg.releasePointerCapture(event.pointerId); } catch (_) {}
+  if (kg.drag) {
+    const wasDrag = kg.drag.moved;
+    const node = kg.drag.node;
+    node.fixed = false;
+    kg.svg.classList.remove("kg-dragging");
+    if (!wasDrag) {
+      // It was a click — toggle focus.
+      kg.focus = kg.focus === node.id ? null : node.id;
+      kgUpdateClasses();
+    } else {
+      kgKick(0.4);
+    }
+    kg.drag = null;
+    return;
+  }
+  if (kg.pan) {
+    kg.svg.classList.remove("kg-panning");
+    kg.pan = null;
+    kgUpdateLegend();
+  }
+}
+
+function kgOnWheel(event) {
+  event.preventDefault();
+  const factor = Math.exp(event.deltaY * 0.0012);
+  const pt = kgClientToView(event);
+  const nextW = Math.min(4000, Math.max(400, kg.view.w * factor));
+  const ratio = nextW / kg.view.w;
+  const nextH = kg.view.h * ratio;
+  kg.view.x = pt.x - (pt.x - kg.view.x) * ratio;
+  kg.view.y = pt.y - (pt.y - kg.view.y) * ratio;
+  kg.view.w = nextW;
+  kg.view.h = nextH;
+  kgApplyView();
+  kgUpdateLegend();
+}
+
+function renderFactsGraph(facts) {
+  if (!els.factsGraph) return;
+  const active = facts.filter((f) => !f.valid_to);
+  if (!active.length) {
+    if (kg.mounted) {
+      els.factsGraph.innerHTML = "";
+      kg.mounted = false;
+      kg.signature = "";
+    }
+    const empty = document.createElement("div");
+    empty.className = "empty-list";
+    empty.textContent = "No active facts to graph.";
+    els.factsGraph.appendChild(empty);
+    return;
+  }
+
+  const sig = kgSignature(facts);
+  kgEnsureMount(els.factsGraph);
+
+  if (kg.signature !== sig) {
+    const built = kgBuildGraph(facts);
+    kg.nodes = built.nodes;
+    kg.edges = built.edges;
+    kg.byId = built.byId;
+    kg.signature = sig;
+    kg.focus = state.graphFocus && kg.byId.has(state.graphFocus) ? state.graphFocus : null;
+    kg.hover = null;
+    kgBuildDom();
+    kgRenderFrame();
+    kgUpdateClasses();
+    kgKick(1);
+  } else {
+    // Same data, just re-shown — make sure classes reflect any state changes.
+    kgUpdateClasses();
+  }
 }
 
 function render() {
   closeMenus();
-  renderTitle();
   renderStats();
-  renderInventoryTray();
   renderNav();
   renderDrawers();
   renderDetail();
@@ -885,17 +1564,6 @@ els.sortSelect.addEventListener("change", () => {
   render();
 });
 
-els.authorSelect.addEventListener("change", () => {
-  state.authorFilter = els.authorSelect.value;
-  render();
-});
-
-els.refreshBtn.addEventListener("click", () => {
-  loadPalace().catch((err) => {
-    if (err.message !== "Authentication required.") alert(`Refresh failed: ${err.message}`);
-  });
-});
-
 // ---------- status helpers ----------
 function setStatus(node, message, type = "") {
   node.className = `write-status ${type}`;
@@ -910,21 +1578,6 @@ const setTrashStatus = (m, t = "") => setStatus(els.trashStatus, m, t);
 const setFactStatus = (m, t = "") => setStatus(els.factStatus, m, t);
 
 // ---------- write sheet pickers (unchanged behaviour) ----------
-function appendOption(select, label, value) {
-  const option = document.createElement("option");
-  option.textContent = label;
-  option.value = value;
-  select.append(option);
-}
-
-function fillPicker(select, items, placeholder) {
-  const uniqueItems = [...new Set(items.filter(Boolean))].sort((a, b) => a.localeCompare(b));
-  select.replaceChildren();
-  appendOption(select, placeholder, "");
-  uniqueItems.forEach((item) => appendOption(select, item, item));
-  select.value = "";
-}
-
 function existingWings() {
   return state.palace.wings.map((wing) => wing.name);
 }
@@ -938,8 +1591,15 @@ function roomsForWing(wingName) {
 }
 
 function matchingExisting(value, existingItems) {
-  const trimmed = value.trim();
-  return existingItems.find((item) => item === trimmed) || existingItems.find((item) => item.toLowerCase() === trimmed.toLowerCase()) || "";
+  const trimmed = String(value ?? "").trim();
+  if (!trimmed) return "";
+  const lower = trimmed.toLowerCase();
+  return (
+    existingItems.find((item) => item === trimmed) ||
+    existingItems.find((item) => item.toLowerCase() === lower) ||
+    existingItems.find((item) => humanizeName(item).toLowerCase() === lower) ||
+    ""
+  );
 }
 
 function toMemoryName(value) {
@@ -959,16 +1619,158 @@ function getWriteRoom() {
   return matchingExisting(els.writeRoom.value, roomsForWing(getWriteWing())) || toMemoryName(els.writeRoom.value);
 }
 
-function updateRoomPicker() {
-  const wing = getWriteWing();
-  fillPicker(els.writeRoomPicker, roomsForWing(wing), "Choose room");
+// ---------- combobox ----------
+function setupCombo({ field, getItems, onPick, normalize, kind }) {
+  const comboEl = field.querySelector(".combo");
+  const input = field.querySelector("[data-combo-input]");
+  const toggle = field.querySelector("[data-combo-toggle]");
+  const menu = field.querySelector("[data-combo-menu]");
+  let highlighted = -1;
+  let lastItems = [];
+
+  function currentItems() {
+    const filter = (input.value || "").trim().toLowerCase();
+    const items = [...new Set((getItems() || []).filter(Boolean))].sort((a, b) =>
+      humanizeName(a).localeCompare(humanizeName(b)),
+    );
+    if (!filter) return items;
+    return items.filter(
+      (slug) =>
+        slug.toLowerCase().includes(filter) ||
+        humanizeName(slug).toLowerCase().includes(filter),
+    );
+  }
+
+  function render() {
+    lastItems = currentItems();
+    if (highlighted >= lastItems.length) highlighted = lastItems.length - 1;
+    const typedRaw = (input.value || "").trim();
+    const typedSlug = typedRaw ? toMemoryName(typedRaw) : "";
+    const matchesExisting = matchingExisting(typedRaw, getItems() || "");
+    const showCreate = typedSlug && !matchesExisting && !lastItems.includes(typedSlug);
+    const itemsHtml = lastItems
+      .map(
+        (slug, idx) => `
+        <button type="button" class="combo-option" role="option" data-slug="${escapeHtml(slug)}" ${
+          highlighted === idx ? 'aria-selected="true"' : ""
+        }>
+          <strong>${escapeHtml(humanizeName(slug))}</strong>
+          <span class="combo-option-slug">${escapeHtml(slug)}</span>
+        </button>`,
+      )
+      .join("");
+    const emptyHint = !lastItems.length
+      ? `<div class="combo-option-hint">${
+          getItems() && getItems().length
+            ? "No matches in this list."
+            : `No existing ${kind}s yet — type one to create.`
+        }</div>`
+      : "";
+    const createHtml = showCreate
+      ? `<button type="button" class="combo-option combo-option-create" role="option" data-slug="${escapeHtml(typedSlug)}" data-create="true">
+          <strong>Create "${escapeHtml(humanizeName(typedSlug))}"</strong>
+          <span class="combo-option-slug">${escapeHtml(typedSlug)}</span>
+        </button>`
+      : "";
+    menu.innerHTML = itemsHtml + emptyHint + createHtml;
+  }
+
+  function open() {
+    if (comboEl.dataset.open === "true") return;
+    comboEl.dataset.open = "true";
+    input.setAttribute("aria-expanded", "true");
+    menu.classList.remove("hidden");
+    render();
+  }
+
+  function close() {
+    comboEl.dataset.open = "false";
+    input.setAttribute("aria-expanded", "false");
+    menu.classList.add("hidden");
+    highlighted = -1;
+  }
+
+  function pick(slug) {
+    input.value = slug;
+    if (onPick) onPick(slug);
+    close();
+    input.focus();
+  }
+
+  toggle.addEventListener("mousedown", (event) => {
+    event.preventDefault();
+    if (comboEl.dataset.open === "true") {
+      close();
+    } else {
+      open();
+      input.focus();
+    }
+  });
+
+  input.addEventListener("focus", () => open());
+
+  input.addEventListener("input", () => {
+    highlighted = -1;
+    open();
+  });
+
+  input.addEventListener("blur", () => {
+    setTimeout(() => {
+      if (menu.contains(document.activeElement)) return;
+      if (normalize) input.value = normalize(input.value);
+      close();
+    }, 120);
+  });
+
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      close();
+      return;
+    }
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      open();
+      highlighted = Math.min(highlighted + 1, lastItems.length - 1);
+      render();
+      return;
+    }
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      highlighted = Math.max(highlighted - 1, -1);
+      render();
+      return;
+    }
+    if (event.key === "Enter") {
+      if (comboEl.dataset.open === "true" && highlighted >= 0 && lastItems[highlighted]) {
+        event.preventDefault();
+        pick(lastItems[highlighted]);
+      }
+    }
+  });
+
+  menu.addEventListener("mousedown", (event) => {
+    const option = event.target.closest(".combo-option");
+    if (!option) return;
+    event.preventDefault();
+    pick(option.dataset.slug);
+  });
+
+  document.addEventListener("mousedown", (event) => {
+    if (!field.contains(event.target)) close();
+  });
+
+  return { open, close, refresh: render };
 }
 
+let writeWingCombo = null;
+let writeRoomCombo = null;
+
 function renderWritePickers(preferredWing = "", preferredRoom = "") {
-  fillPicker(els.writeWingPicker, existingWings(), "Choose wing");
   els.writeWing.value = preferredWing;
-  updateRoomPicker();
   els.writeRoom.value = preferredRoom;
+  if (writeWingCombo) writeWingCombo.close();
+  if (writeRoomCombo) writeRoomCombo.close();
 }
 
 function setWriteSheetMode(mode, draft = null) {
@@ -1043,7 +1845,7 @@ function deleteRequestFromButton(button) {
     return {
       payload: { scope, drawer_id: drawer.drawer_id },
       title: "Delete memory?",
-      body: `Only this memory will be deleted: ${drawer.title} in ${drawer.wing}/${drawer.room}.`,
+      body: `Only this memory will be deleted: ${drawer.title} in ${humanizeName(drawer.wing)} / ${humanizeName(drawer.room)}.`,
       warning: derivedNote,
       count: 1,
     };
@@ -1054,8 +1856,8 @@ function deleteRequestFromButton(button) {
     const count = drawersInRoom(wing, room).length;
     return {
       payload: { scope, wing, room },
-      title: `Delete room ${wing}/${room}?`,
-      body: `${count} memor${count === 1 ? "y" : "ies"} will be permanently deleted.`,
+      title: `Delete room ${humanizeName(room)}?`,
+      body: `${count} memor${count === 1 ? "y" : "ies"} in ${humanizeName(wing)} / ${humanizeName(room)} will be permanently deleted.`,
       warning: "Snapshots are kept in Trash for recovery.",
       count,
     };
@@ -1065,8 +1867,8 @@ function deleteRequestFromButton(button) {
     const count = drawersInWing(wing).length;
     return {
       payload: { scope, wing },
-      title: `Delete wing ${wing}?`,
-      body: `${count} memor${count === 1 ? "y" : "ies"} across all rooms will be permanently deleted.`,
+      title: `Delete wing ${humanizeName(wing)}?`,
+      body: `${count} memor${count === 1 ? "y" : "ies"} across all rooms in ${humanizeName(wing)} will be permanently deleted.`,
       warning: "Snapshots are kept in Trash for recovery.",
       count,
     };
@@ -1428,15 +2230,13 @@ function setCurrentPasswordRequired(required) {
   }
 }
 
-function validatePasswordMatch() {
-  const pw = els.settingsPassword.value;
-  const confirmPw = els.settingsPasswordConfirm.value;
-  const bothTouched = pw.length > 0 && confirmPw.length > 0;
-  const mismatch = bothTouched && pw !== confirmPw;
-  els.settingsMatchError.classList.toggle("hidden", !mismatch);
-  els.settingsPasswordConfirm.classList.toggle("invalid-mismatch", mismatch);
-  els.saveSettings.disabled = mismatch;
-  return !mismatch;
+function passwordsMatch() {
+  return els.settingsPassword.value === els.settingsPasswordConfirm.value;
+}
+
+function setMatchErrorVisible(visible) {
+  els.settingsMatchError.classList.toggle("hidden", !visible);
+  els.settingsPasswordConfirm.classList.toggle("invalid-mismatch", visible);
 }
 
 async function openSettingsSheet() {
@@ -1446,7 +2246,7 @@ async function openSettingsSheet() {
   els.settingsCurrentPassword.value = "";
   els.settingsUsername.value = "";
   setCurrentPasswordRequired(false);
-  validatePasswordMatch();
+  setMatchErrorVisible(false);
   els.saveSettings.disabled = false;
   els.settingsSheet.classList.remove("hidden");
   try {
@@ -1470,14 +2270,15 @@ function closeSettingsSheet() {
 
 async function saveSettings(event) {
   event.preventDefault();
+  setMatchErrorVisible(false);
   const password = els.settingsPassword.value;
-  const confirmPw = els.settingsPasswordConfirm.value;
   if (password.length < 8) {
     setSettingsStatus("Password must be at least 8 characters.", "error");
     return;
   }
-  if (!validatePasswordMatch() || password !== confirmPw) {
-    setSettingsStatus("New password and confirmation do not match.", "error");
+  if (!passwordsMatch()) {
+    setMatchErrorVisible(true);
+    els.settingsPasswordConfirm.focus();
     return;
   }
   const currentRequired = !els.settingsCurrentRow.classList.contains("hidden");
@@ -1508,9 +2309,95 @@ async function saveSettings(event) {
 if (els.settingsBtn) els.settingsBtn.addEventListener("click", openSettingsSheet);
 if (els.settingsClose) els.settingsClose.addEventListener("click", closeSettingsSheet);
 if (els.settingsBackdrop) els.settingsBackdrop.addEventListener("click", closeSettingsSheet);
+async function exportPalace() {
+  const btn = document.querySelector("#exportBtn");
+  const status = document.querySelector("#exportStatus");
+  const setStat = (msg, type = "") => {
+    if (!status) return;
+    status.className = `write-status ${type}`;
+    status.textContent = msg;
+  };
+  if (btn) btn.disabled = true;
+  setStat("Preparing download…", "info");
+  try {
+    const data = await fetchJson("/api/export");
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const stamp = new Date().toISOString().slice(0, 10);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `mempalace-export-${stamp}.json`;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    setStat(`Exported ${data.counts.drawers} memories · ${data.counts.facts} facts.`, "success");
+  } catch (error) {
+    setStat(error.message, "error");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+const exportBtn = document.querySelector("#exportBtn");
+if (exportBtn) exportBtn.addEventListener("click", exportPalace);
+
+async function importPalace(file) {
+  const status = document.querySelector("#exportStatus");
+  const importBtn = document.querySelector("#importBtn");
+  const setStat = (msg, type = "") => {
+    if (!status) return;
+    status.className = `write-status ${type}`;
+    status.textContent = msg;
+  };
+  if (importBtn) importBtn.disabled = true;
+  setStat(`Restoring from ${file.name}…`, "info");
+  try {
+    const text = await file.text();
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      throw new Error("File isn't valid JSON.");
+    }
+    const result = await postJson("/api/import", { data });
+    const addedD = result.added.drawers;
+    const addedF = result.added.facts;
+    const skippedD = result.skipped.drawers;
+    const skippedF = result.skipped.facts;
+    const errors = (result.errors.drawers.length || 0) + (result.errors.facts.length || 0);
+    const parts = [
+      `Restored ${addedD} memor${addedD === 1 ? "y" : "ies"} · ${addedF} fact${addedF === 1 ? "" : "s"}`,
+      `${skippedD + skippedF} already present, skipped`,
+    ];
+    if (errors) parts.push(`${errors} error${errors === 1 ? "" : "s"} — see console`);
+    if (errors) console.warn("Import errors:", result.errors);
+    setStat(parts.join(" · "), errors ? "error" : "success");
+    await loadPalace().catch(() => {});
+  } catch (error) {
+    setStat(error.message, "error");
+  } finally {
+    if (importBtn) importBtn.disabled = false;
+  }
+}
+
+const importBtn = document.querySelector("#importBtn");
+const importInput = document.querySelector("#importInput");
+if (importBtn && importInput) {
+  importBtn.addEventListener("click", () => importInput.click());
+  importInput.addEventListener("change", () => {
+    const file = importInput.files && importInput.files[0];
+    if (file) importPalace(file);
+    importInput.value = "";
+  });
+}
+
 if (els.settingsForm) els.settingsForm.addEventListener("submit", saveSettings);
-if (els.settingsPassword) els.settingsPassword.addEventListener("input", validatePasswordMatch);
-if (els.settingsPasswordConfirm) els.settingsPasswordConfirm.addEventListener("input", validatePasswordMatch);
+// Any input event in either password field clears a stale mismatch error.
+// The error is only re-shown on the next save attempt with mismatched values.
+const dismissMatchError = () => setMatchErrorVisible(false);
+if (els.settingsPassword) els.settingsPassword.addEventListener("input", dismissMatchError);
+if (els.settingsPasswordConfirm) els.settingsPasswordConfirm.addEventListener("input", dismissMatchError);
 
 // ---------- login ----------
 function openLoginSheet(message = "") {
@@ -1551,6 +2438,67 @@ async function logout() {
 
 if (els.logoutBtn) els.logoutBtn.addEventListener("click", logout);
 
+if (els.factsViewList) {
+  els.factsViewList.addEventListener("click", () => {
+    if (state.factsView === "list") return;
+    state.factsView = "list";
+    renderFacts();
+  });
+}
+if (els.factsViewGraph) {
+  els.factsViewGraph.addEventListener("click", () => {
+    if (state.factsView === "graph") return;
+    state.factsView = "graph";
+    renderFacts();
+  });
+}
+
+// ---------- rename submission ----------
+async function submitRename(form) {
+  const input = form.querySelector(".rename-input");
+  if (!input) return;
+  const scope = form.dataset.renameScope;
+  const current = form.dataset.current;
+  const next = input.value.trim();
+  if (!next) {
+    input.focus();
+    return;
+  }
+  if (next === current) {
+    state.renaming = null;
+    render();
+    return;
+  }
+  const submitBtn = form.querySelector("button[type='submit']");
+  if (submitBtn) submitBtn.disabled = true;
+  input.classList.remove("rename-error");
+  try {
+    const payload = { scope, new_name: next };
+    if (scope === "wing") {
+      payload.wing = state.renaming && state.renaming.wing;
+    } else if (scope === "room") {
+      payload.wing = state.renaming && state.renaming.wing;
+      payload.room = state.renaming && state.renaming.room;
+    }
+    await postJson("/api/rename", payload);
+    if (scope === "wing" && state.selectedWing === current) state.selectedWing = next;
+    if (scope === "room" && state.selectedRoom === current) state.selectedRoom = next;
+    state.renaming = null;
+    await loadPalace();
+  } catch (error) {
+    input.classList.add("rename-error");
+    input.title = error.message;
+    if (submitBtn) submitBtn.disabled = false;
+  }
+}
+
+document.addEventListener("submit", (event) => {
+  const form = event.target.closest("[data-rename-form]");
+  if (!form) return;
+  event.preventDefault();
+  submitRename(form);
+});
+
 // ---------- document click router ----------
 document.addEventListener("click", (event) => {
   const menuButton = event.target.closest(".menu-button");
@@ -1566,6 +2514,34 @@ document.addEventListener("click", (event) => {
     event.stopPropagation();
     closeMenus();
     openDeleteSheet(deleteRequestFromButton(deleteButton));
+    return;
+  }
+  const renameButton = event.target.closest("[data-rename-scope]");
+  if (renameButton && !event.target.closest("[data-rename-form]")) {
+    event.preventDefault();
+    event.stopPropagation();
+    const scope = renameButton.dataset.renameScope;
+    state.renaming = {
+      scope,
+      wing: renameButton.dataset.wing || null,
+      room: renameButton.dataset.room || null,
+    };
+    render();
+    requestAnimationFrame(() => {
+      const input = document.querySelector(".rename-input");
+      if (input) {
+        input.focus();
+        input.select();
+      }
+    });
+    return;
+  }
+  const renameCancel = event.target.closest("[data-rename-cancel]");
+  if (renameCancel) {
+    event.preventDefault();
+    event.stopPropagation();
+    state.renaming = null;
+    render();
     return;
   }
   const editButton = event.target.closest("[data-edit-drawer-id]");
@@ -1591,15 +2567,15 @@ document.addEventListener("keydown", (event) => {
     return;
   }
   if (event.key === "Escape") {
+    if (state.renaming) {
+      state.renaming = null;
+      render();
+      return;
+    }
     [els.writeSheet, els.editSheet, els.deleteSheet, els.draftsSheet, els.trashSheet, els.factSheet, els.settingsSheet]
       .forEach((sheet) => sheet && sheet.classList.add("hidden"));
     closeMenus();
     return;
-  }
-  if (!isMod && event.key.toLowerCase() === "r" && !["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement.tagName)) {
-    loadPalace().catch((err) => {
-    if (err.message !== "Authentication required.") alert(`Refresh failed: ${err.message}`);
-  });
   }
 });
 
@@ -1633,25 +2609,23 @@ els.factForm.addEventListener("submit", saveFact);
 els.writeOpen.addEventListener("click", openWriteSheet);
 els.writeClose.addEventListener("click", closeWriteSheet);
 els.writeBackdrop.addEventListener("click", closeWriteSheet);
-els.writeWing.addEventListener("input", updateRoomPicker);
-els.writeWing.addEventListener("blur", () => {
-  els.writeWing.value = getWriteWing();
-  updateRoomPicker();
+
+writeWingCombo = setupCombo({
+  field: document.querySelector('[data-combo="wing"]'),
+  kind: "wing",
+  getItems: () => existingWings(),
+  normalize: (value) => getWriteWing(),
+  onPick: () => {
+    els.writeRoom.value = "";
+    if (writeRoomCombo) writeRoomCombo.refresh();
+  },
 });
-els.writeRoom.addEventListener("blur", () => {
-  els.writeRoom.value = getWriteRoom();
-});
-els.writeWingPicker.addEventListener("change", () => {
-  if (!els.writeWingPicker.value) return;
-  els.writeWing.value = els.writeWingPicker.value;
-  els.writeRoom.value = "";
-  updateRoomPicker();
-  els.writeWing.focus();
-});
-els.writeRoomPicker.addEventListener("change", () => {
-  if (!els.writeRoomPicker.value) return;
-  els.writeRoom.value = els.writeRoomPicker.value;
-  els.writeRoom.focus();
+
+writeRoomCombo = setupCombo({
+  field: document.querySelector('[data-combo="room"]'),
+  kind: "room",
+  getItems: () => roomsForWing(getWriteWing()),
+  normalize: (value) => getWriteRoom(),
 });
 
 function gatherWritePayload() {
