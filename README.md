@@ -29,7 +29,7 @@ A local web UI for browsing, editing, and curating a [MemPalace](https://github.
 ### Run
 
 ```bash
-git clone <this-repo-url> mempalace-dashboard
+git clone <https://github.com/epinethrone/mempalace-frontend> mempalace-dashboard
 cd mempalace-dashboard
 PORT=8765 python3 server.py
 ```
