@@ -9,7 +9,7 @@
     <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=3" />
     <meta name="theme-color" content="#f5f5f7" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)" />
-    <link rel="stylesheet" href="/styles.css?v=23" />
+    <link rel="stylesheet" href="/styles.css?v=47" />
   </head>
   <body>
     <div class="shell">
@@ -45,16 +45,20 @@
 
       <main class="main">
         <header class="topbar">
-          <div>
-            <h1 id="pageTitle">Palace</h1>
-            <p id="pageSubtitle">Read-only view of local memory.</p>
+          <div class="search" role="search">
+            <svg class="search-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="1.7"/>
+              <path d="m16 16 4.5 4.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" fill="none"/>
+            </svg>
+            <input
+              id="searchInput"
+              type="search"
+              placeholder="Search memories, facts, paths…"
+              aria-label="Search"
+            />
+            <kbd class="hint" id="searchHint">⌘K</kbd>
           </div>
           <div class="top-actions">
-            <label class="search">
-              <span>Search <kbd class="hint" id="searchHint">⌘K</kbd></span>
-              <input id="searchInput" type="search" placeholder="Find drawers, facts, paths…" />
-            </label>
-            <button class="icon-button toolbar-button" id="refreshBtn" type="button" aria-label="Refresh data" title="Refresh (R)">↻</button>
             <button class="icon-button toolbar-button" id="draftsBtn" type="button" aria-label="View drafts" title="Drafts">Drafts<span class="badge hidden" id="draftsBadge">0</span></button>
             <button class="icon-button toolbar-button icon-only" id="trashBtn" type="button" aria-label="View trash" title="Recently deleted">
               <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -72,13 +76,22 @@
         </header>
 
         <section class="stats" id="stats"></section>
-        <section class="inventory-tray hidden" id="inventoryTray"></section>
 
         <section class="content-grid">
+          <div class="panel rooms-panel">
+            <div class="panel-header">
+              <div>
+                <h2>Rooms</h2>
+                <p id="roomCount"></p>
+              </div>
+            </div>
+            <div class="room-nav" id="roomNav"></div>
+          </div>
+
           <div class="panel drawers-panel">
             <div class="panel-header">
               <div>
-                <h2>Drawers</h2>
+                <h2>Memories</h2>
                 <p id="drawerCount"></p>
               </div>
               <div class="panel-tools">
@@ -91,15 +104,8 @@
                     <option value="wing">Wing / room</option>
                   </select>
                 </label>
-                <label class="inline-field">
-                  <span>Author</span>
-                  <select id="authorSelect" aria-label="Filter by author">
-                    <option value="all">All</option>
-                  </select>
-                </label>
               </div>
             </div>
-            <div class="room-nav" id="roomNav"></div>
             <div class="drawer-list" id="drawerList"></div>
           </div>
 
@@ -110,8 +116,8 @@
                 alt="MemPalace logo"
                 class="empty-logo"
               />
-              <h2>Select a drawer</h2>
-              <p>Choose a memory from the left to inspect its content and metadata.</p>
+              <h2>Select a memory</h2>
+              <p>Choose a memory from the list to inspect its content and metadata.</p>
             </div>
             <article class="detail hidden" id="detail"></article>
           </div>
@@ -124,11 +130,38 @@
               <p id="factCount"></p>
             </div>
             <div class="panel-tools">
+              <div class="view-toggle" role="tablist" aria-label="Knowledge graph view">
+                <button class="view-toggle-btn active" id="factsViewList" type="button" role="tab" aria-selected="true">List</button>
+                <button class="view-toggle-btn" id="factsViewGraph" type="button" role="tab" aria-selected="false">Graph</button>
+              </div>
               <button class="icon-button toolbar-button" id="addFactBtn" type="button">+ Add fact</button>
             </div>
           </div>
           <div class="facts" id="facts"></div>
+          <div class="facts-graph hidden" id="factsGraph"></div>
         </section>
+
+        <footer class="footer">
+          <div class="footer-brand">
+            <div>
+              <strong>MemPalace Dashboard</strong>
+              <span>Local-first memory · open source</span>
+            </div>
+            <a
+              id="footerRepoLink"
+              class="footer-link"
+              href="https://github.com/epinethrone/mempalace-frontend"
+              target="_blank"
+              rel="noopener"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48 0-.24-.01-.87-.01-1.71-2.78.6-3.37-1.34-3.37-1.34-.45-1.15-1.1-1.46-1.1-1.46-.9-.62.07-.6.07-.6 1 .07 1.53 1.03 1.53 1.03.89 1.52 2.34 1.08 2.91.82.09-.65.35-1.08.63-1.33-2.22-.25-4.56-1.11-4.56-4.95 0-1.1.39-2 1.03-2.7-.1-.25-.45-1.28.1-2.67 0 0 .84-.27 2.75 1.03A9.56 9.56 0 0 1 12 6.84a9.55 9.55 0 0 1 2.5.34c1.91-1.3 2.75-1.03 2.75-1.03.55 1.39.2 2.42.1 2.67.64.7 1.03 1.6 1.03 2.7 0 3.85-2.34 4.7-4.57 4.95.36.31.68.92.68 1.85 0 1.34-.01 2.42-.01 2.75 0 .27.18.58.69.48A10 10 0 0 0 12 2Z" fill="currentColor"/>
+              </svg>
+              <span>GitHub</span>
+            </a>
+          </div>
+          <div class="footer-info" id="footerInfo"></div>
+        </footer>
       </main>
     </div>
 
@@ -143,18 +176,66 @@
           <button class="icon-button" id="writeClose" type="button" aria-label="Close write panel">Close</button>
         </div>
         <div class="write-grid">
-          <label class="write-field">
+          <label class="write-field combo-field" data-combo="wing">
             <span>Wing</span>
-            <div class="combo-field">
-              <input name="wing" id="writeWing" placeholder="pi-ops" required autocomplete="off" />
-              <select id="writeWingPicker" aria-label="Choose existing wing"></select>
+            <div class="combo">
+              <input
+                name="wing"
+                id="writeWing"
+                type="text"
+                placeholder="Choose or type a new wing"
+                required
+                autocomplete="off"
+                spellcheck="false"
+                role="combobox"
+                aria-expanded="false"
+                aria-autocomplete="list"
+                aria-controls="writeWingMenu"
+                data-combo-input
+              />
+              <button
+                type="button"
+                class="combo-toggle"
+                aria-label="Show existing wings"
+                tabindex="-1"
+                data-combo-toggle
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="m6 9 6 6 6-6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </button>
+              <div class="combo-menu hidden" id="writeWingMenu" role="listbox" data-combo-menu></div>
             </div>
           </label>
-          <label class="write-field">
+          <label class="write-field combo-field" data-combo="room">
             <span>Room</span>
-            <div class="combo-field">
-              <input name="room" id="writeRoom" placeholder="network" required autocomplete="off" />
-              <select id="writeRoomPicker" aria-label="Choose existing room"></select>
+            <div class="combo">
+              <input
+                name="room"
+                id="writeRoom"
+                type="text"
+                placeholder="Choose or type a new room"
+                required
+                autocomplete="off"
+                spellcheck="false"
+                role="combobox"
+                aria-expanded="false"
+                aria-autocomplete="list"
+                aria-controls="writeRoomMenu"
+                data-combo-input
+              />
+              <button
+                type="button"
+                class="combo-toggle"
+                aria-label="Show rooms in this wing"
+                tabindex="-1"
+                data-combo-toggle
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="m6 9 6 6 6-6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </button>
+              <div class="combo-menu hidden" id="writeRoomMenu" role="listbox" data-combo-menu></div>
             </div>
           </label>
         </div>
@@ -312,14 +393,41 @@
           <label>
             <span>Confirm password <span class="required-marker">*</span></span>
             <input id="settingsPasswordConfirm" type="password" minlength="8" required autocomplete="new-password" />
-            <small class="field-error hidden" id="settingsMatchError">Passwords don't match.</small>
           </label>
         </div>
+        <small class="field-error hidden" id="settingsMatchError">Passwords don't match.</small>
         <div class="write-actions-row" style="justify-content: space-between;">
           <button class="icon-button danger-button" id="logoutBtn" type="button">Sign out</button>
           <button class="primary-action save-memory" id="saveSettings" type="submit">Save</button>
         </div>
         <div class="write-status" id="settingsStatus"></div>
+
+        <div class="settings-section">
+          <div class="settings-section-head">
+            <strong>Backup &amp; restore</strong>
+            <span>Download a JSON snapshot of every memory and fact, or merge one back in. Existing items aren't duplicated.</span>
+          </div>
+          <div class="settings-actions">
+            <button class="icon-button settings-export" id="exportBtn" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 3v12" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+                <path d="m7 10 5 5 5-5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M5 19h14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+              </svg>
+              <span>Download memories</span>
+            </button>
+            <button class="icon-button settings-export" id="importBtn" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 21V9" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+                <path d="m7 14 5-5 5 5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M5 5h14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+              </svg>
+              <span>Restore from file</span>
+            </button>
+            <input type="file" id="importInput" accept="application/json,.json" class="hidden" />
+          </div>
+          <div class="write-status" id="exportStatus"></div>
+        </div>
       </form>
     </section>
 
@@ -345,6 +453,6 @@
       </form>
     </section>
 
-    <script src="/app.js?v=23"></script>
+    <script src="/app.js?v=47"></script>
   </body>
 </html>
