@@ -1,3 +1,4 @@
+<img width="1722" height="972" alt="Screenshot 2026-05-24 at 01 04 04" src="https://github.com/user-attachments/assets/fb218c65-fa51-4613-aede-9ec033f76edc" />
 # MemPalace Dashboard
 
 A local web UI for browsing, editing, and curating a [MemPalace](https://github.com/) personal-memory store. Reads directly from the MemPalace SQLite/Chroma backends; all mutations go through the official `mempalace` Python package (`tool_add_drawer`, `tool_update_drawer`, `tool_delete_drawer`, `tool_kg_add`, `tool_kg_invalidate`).
