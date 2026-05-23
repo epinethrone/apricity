@@ -247,21 +247,28 @@ def _row_dicts(cursor: sqlite3.Cursor) -> list[dict]:
 
 
 def read_drawers() -> list[dict]:
-    con = sqlite3.connect(PALACE_DB)
-    con.row_factory = sqlite3.Row
-    rows = _row_dicts(
-        con.execute(
-            """
-            select e.id, e.embedding_id, em.key,
-                   coalesce(em.string_value, em.int_value, em.float_value, em.bool_value) as value
-            from embeddings e
-            join embedding_metadata em on em.id = e.id
-            where e.embedding_id like 'drawer_%'
-            order by e.id
-            """
+    if not PALACE_DB.exists():
+        return []
+    try:
+        con = sqlite3.connect(PALACE_DB)
+        con.row_factory = sqlite3.Row
+        rows = _row_dicts(
+            con.execute(
+                """
+                select e.id, e.embedding_id, em.key,
+                       coalesce(em.string_value, em.int_value, em.float_value, em.bool_value) as value
+                from embeddings e
+                join embedding_metadata em on em.id = e.id
+                where e.embedding_id like 'drawer_%'
+                order by e.id
+                """
+            )
         )
-    )
-    con.close()
+        con.close()
+    except sqlite3.OperationalError:
+        # MemPalace schema not initialised on this host — render an empty palace
+        # so the dashboard stays usable for first-time setup or testing.
+        return []
 
     by_id: dict[int, dict] = {}
     for row in rows:
@@ -306,20 +313,26 @@ def extract_title(content: str, fallback: str) -> str:
 
 
 def read_triples() -> list[dict]:
-    con = sqlite3.connect(KG_DB)
-    con.row_factory = sqlite3.Row
-    rows = _row_dicts(
-        con.execute(
-            """
-            select id, subject, predicate, object, valid_from, valid_to,
-                   confidence, source_drawer_id, extracted_at
-            from triples
-            order by extracted_at desc, subject, predicate
-            """
+    if not KG_DB.exists():
+        return []
+    try:
+        con = sqlite3.connect(KG_DB)
+        con.row_factory = sqlite3.Row
+        rows = _row_dicts(
+            con.execute(
+                """
+                select id, subject, predicate, object, valid_from, valid_to,
+                       confidence, source_drawer_id, extracted_at
+                from triples
+                order by extracted_at desc, subject, predicate
+                """
+            )
         )
-    )
-    con.close()
-    return rows
+        con.close()
+        return rows
+    except sqlite3.OperationalError:
+        # Knowledge-graph DB exists but the schema hasn't been initialised yet.
+        return []
 
 
 def build_payload() -> dict:
