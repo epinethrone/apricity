@@ -1,0 +1,29 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+
+.DS_Store
+Thumbs.db
+
+# Editor noise
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Local environment overrides
+.env
+.env.local
+
+# Runtime / per-host data (kept under $MEMPALACE_HOME by default,
+# but defensively listed in case anyone reconfigures to keep them in-tree)
+dashboard-credentials.json
+dashboard-sessions.json
+dashboard-versions.jsonl
+dashboard-inbox/

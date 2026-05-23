@@ -1,0 +1,350 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MemPalace</title>
+    <link rel="icon" href="/favicon.ico?v=3" sizes="any" />
+    <link rel="icon" type="image/png" href="/favicon-32.png?v=3" sizes="32x32" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=3" />
+    <meta name="theme-color" content="#f5f5f7" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)" />
+    <link rel="stylesheet" href="/styles.css?v=23" />
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">
+            <img
+              src="/mempalace-logo-transparent.png"
+              alt="MemPalace logo"
+              class="brand-logo"
+            />
+          </div>
+          <div>
+            <div class="brand-name">MemPalace</div>
+            <div class="brand-subtitle">Local memory</div>
+          </div>
+        </div>
+
+        <nav class="nav" id="wingNav"></nav>
+
+        <div class="sidebar-footer">
+          <button class="nav-item sidebar-action" id="settingsBtn" type="button" aria-label="Open settings">
+            <span class="sidebar-action-label">
+              <svg class="sidebar-action-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.6"/>
+                <path d="M19.4 12a7.5 7.5 0 0 0-.08-1.16l2.07-1.62-2-3.46-2.45.98a7.5 7.5 0 0 0-2-1.16L14.5 2h-4l-.44 2.58a7.5 7.5 0 0 0-2 1.16l-2.45-.98-2 3.46 2.07 1.62A7.5 7.5 0 0 0 5.6 12c0 .4.03.78.08 1.16L3.6 14.78l2 3.46 2.45-.98c.6.47 1.27.86 2 1.16L10.5 21h4l.44-2.58c.73-.3 1.4-.69 2-1.16l2.45.98 2-3.46-2.07-1.62c.05-.38.08-.77.08-1.16Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+              </svg>
+              Settings
+            </span>
+          </button>
+        </div>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+          <div>
+            <h1 id="pageTitle">Palace</h1>
+            <p id="pageSubtitle">Read-only view of local memory.</p>
+          </div>
+          <div class="top-actions">
+            <label class="search">
+              <span>Search <kbd class="hint" id="searchHint">⌘K</kbd></span>
+              <input id="searchInput" type="search" placeholder="Find drawers, facts, paths…" />
+            </label>
+            <button class="icon-button toolbar-button" id="refreshBtn" type="button" aria-label="Refresh data" title="Refresh (R)">↻</button>
+            <button class="icon-button toolbar-button" id="draftsBtn" type="button" aria-label="View drafts" title="Drafts">Drafts<span class="badge hidden" id="draftsBadge">0</span></button>
+            <button class="icon-button toolbar-button icon-only" id="trashBtn" type="button" aria-label="View trash" title="Recently deleted">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M5 7h14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" fill="none"/>
+                <path d="M10 7V5.5A1.5 1.5 0 0 1 11.5 4h1A1.5 1.5 0 0 1 14 5.5V7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" fill="none"/>
+                <path d="M7 7h10l-.9 11.2A1.8 1.8 0 0 1 14.3 20H9.7a1.8 1.8 0 0 1-1.8-1.8L7 7Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" fill="none"/>
+                <path d="M10.5 10.5v6M13.5 10.5v6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+              </svg>
+            </button>
+            <button class="icon-button toolbar-button icon-only" id="themeToggle" type="button" aria-label="Toggle theme">
+              <svg id="themeIcon" viewBox="0 0 24 24" aria-hidden="true"></svg>
+            </button>
+            <button class="write-open" id="writeOpen" type="button">Write</button>
+          </div>
+        </header>
+
+        <section class="stats" id="stats"></section>
+        <section class="inventory-tray hidden" id="inventoryTray"></section>
+
+        <section class="content-grid">
+          <div class="panel drawers-panel">
+            <div class="panel-header">
+              <div>
+                <h2>Drawers</h2>
+                <p id="drawerCount"></p>
+              </div>
+              <div class="panel-tools">
+                <label class="inline-field">
+                  <span>Sort</span>
+                  <select id="sortSelect" aria-label="Sort drawers">
+                    <option value="filed-desc">Newest first</option>
+                    <option value="filed-asc">Oldest first</option>
+                    <option value="title">Title A→Z</option>
+                    <option value="wing">Wing / room</option>
+                  </select>
+                </label>
+                <label class="inline-field">
+                  <span>Author</span>
+                  <select id="authorSelect" aria-label="Filter by author">
+                    <option value="all">All</option>
+                  </select>
+                </label>
+              </div>
+            </div>
+            <div class="room-nav" id="roomNav"></div>
+            <div class="drawer-list" id="drawerList"></div>
+          </div>
+
+          <div class="panel detail-panel">
+            <div class="detail-empty" id="emptyState">
+              <img
+                src="/mempalace-logo-transparent.png"
+                alt="MemPalace logo"
+                class="empty-logo"
+              />
+              <h2>Select a drawer</h2>
+              <p>Choose a memory from the left to inspect its content and metadata.</p>
+            </div>
+            <article class="detail hidden" id="detail"></article>
+          </div>
+        </section>
+
+        <section class="panel facts-panel">
+          <div class="panel-header">
+            <div>
+              <h2>Knowledge Graph</h2>
+              <p id="factCount"></p>
+            </div>
+            <div class="panel-tools">
+              <button class="icon-button toolbar-button" id="addFactBtn" type="button">+ Add fact</button>
+            </div>
+          </div>
+          <div class="facts" id="facts"></div>
+        </section>
+      </main>
+    </div>
+
+    <section class="write-sheet hidden" id="writeSheet" aria-label="Write memory">
+      <div class="write-backdrop" id="writeBackdrop"></div>
+      <form class="write-panel" id="writeForm">
+        <div class="write-header">
+          <div>
+            <h2 id="writeSheetTitle">Write Memory</h2>
+            <p id="writeSheetSubtitle">Choose where it belongs and save once.</p>
+          </div>
+          <button class="icon-button" id="writeClose" type="button" aria-label="Close write panel">Close</button>
+        </div>
+        <div class="write-grid">
+          <label class="write-field">
+            <span>Wing</span>
+            <div class="combo-field">
+              <input name="wing" id="writeWing" placeholder="pi-ops" required autocomplete="off" />
+              <select id="writeWingPicker" aria-label="Choose existing wing"></select>
+            </div>
+          </label>
+          <label class="write-field">
+            <span>Room</span>
+            <div class="combo-field">
+              <input name="room" id="writeRoom" placeholder="network" required autocomplete="off" />
+              <select id="writeRoomPicker" aria-label="Choose existing room"></select>
+            </div>
+          </label>
+        </div>
+        <label>
+          <span>Title</span>
+          <input name="title" id="writeTitle" placeholder="Short memory title" maxlength="120" />
+        </label>
+        <label>
+          <span>Content</span>
+          <textarea name="content" id="writeContent" placeholder="Write the memory in clear, non-secret text." required></textarea>
+        </label>
+        <div class="write-warning">Secrets, tokens, raw configs, and database dumps should not be stored.</div>
+        <div class="write-actions-row">
+          <button class="secondary-action" id="saveDraft" type="button">Save draft</button>
+          <button class="primary-action save-memory" id="saveMemory" type="submit">File</button>
+        </div>
+        <div class="write-status" id="writeStatus"></div>
+      </form>
+    </section>
+
+    <section class="edit-sheet hidden" id="editSheet" aria-label="Edit memory">
+      <div class="edit-backdrop" id="editBackdrop"></div>
+      <form class="edit-panel" id="editForm">
+        <div class="write-header">
+          <div>
+            <h2>Edit Memory</h2>
+            <p id="editSubtitle">Update the stored content and metadata.</p>
+          </div>
+          <button class="icon-button" id="editClose" type="button" aria-label="Close edit panel">Close</button>
+        </div>
+        <div class="write-grid">
+          <label>
+            <span>Wing</span>
+            <input id="editWing" autocomplete="off" />
+          </label>
+          <label>
+            <span>Room</span>
+            <input id="editRoom" autocomplete="off" />
+          </label>
+        </div>
+        <label>
+          <span>Title</span>
+          <input id="editTitle" maxlength="120" autocomplete="off" />
+          <small class="field-hint">Editing the title rewrites the first heading line of the content.</small>
+        </label>
+        <label>
+          <span>Content</span>
+          <textarea id="editContent" required></textarea>
+        </label>
+        <div class="edit-id-row">
+          <div class="edit-id"><span>ID</span> <code id="editDrawerLabel"></code></div>
+          <button class="icon-button" type="button" id="copyEditId" title="Copy drawer ID">Copy ID</button>
+        </div>
+        <button class="primary-action save-memory" id="saveEdit" type="submit">Save Changes</button>
+        <div class="write-status" id="editStatus"></div>
+      </form>
+    </section>
+
+    <section class="confirm-sheet hidden" id="deleteSheet" aria-label="Confirm deletion">
+      <div class="confirm-backdrop" id="deleteBackdrop"></div>
+      <div class="confirm-panel">
+        <div class="confirm-icon">!</div>
+        <h2 id="deleteTitle">Delete Memory</h2>
+        <p id="deleteBody"></p>
+        <div class="confirm-warning" id="deleteWarning"></div>
+        <div class="confirm-actions">
+          <button class="secondary-action" id="deleteCancel" type="button">Cancel</button>
+          <button class="danger-action" id="deleteConfirm" type="button">Delete</button>
+        </div>
+        <div class="write-status" id="deleteStatus"></div>
+      </div>
+    </section>
+
+    <section class="confirm-sheet hidden" id="loginSheet" aria-label="Sign in to MemPalace">
+      <div class="confirm-backdrop"></div>
+      <div class="confirm-panel login-panel">
+        <img src="/mempalace-logo-transparent.png" alt="MemPalace logo" class="login-logo brand-logo" />
+        <h2>Sign in</h2>
+        <p>Enter your MemPalace credentials.</p>
+        <form id="loginForm" class="login-form">
+          <label>
+            <span>Username</span>
+            <input id="loginUsername" required autocomplete="username" autofocus />
+          </label>
+          <label>
+            <span>Password</span>
+            <input id="loginPassword" type="password" required autocomplete="current-password" />
+          </label>
+          <label class="checkbox-row">
+            <input type="checkbox" id="loginRemember" />
+            <span>Remember me for 30 days</span>
+          </label>
+          <button class="primary-action" type="submit">Sign in</button>
+        </form>
+        <div class="write-status" id="loginStatus"></div>
+      </div>
+    </section>
+
+    <section class="write-sheet hidden" id="draftsSheet" aria-label="Drafts">
+      <div class="write-backdrop" id="draftsBackdrop"></div>
+      <div class="write-panel">
+        <div class="write-header">
+          <div>
+            <h2>Drafts inbox</h2>
+            <p>Staged memories waiting to be filed into the palace.</p>
+          </div>
+          <button class="icon-button" id="draftsClose" type="button">Close</button>
+        </div>
+        <div id="draftsList" class="draft-list"></div>
+        <div class="write-status" id="draftsStatus"></div>
+      </div>
+    </section>
+
+    <section class="write-sheet hidden" id="trashSheet" aria-label="Recently deleted">
+      <div class="write-backdrop" id="trashBackdrop"></div>
+      <div class="write-panel">
+        <div class="write-header">
+          <div>
+            <h2>Recently deleted</h2>
+            <p>Snapshots of removed or replaced memories. Restoring creates a fresh copy with a new ID.</p>
+          </div>
+          <button class="icon-button" id="trashClose" type="button">Close</button>
+        </div>
+        <div id="trashList" class="draft-list"></div>
+        <div class="write-status" id="trashStatus"></div>
+        <div class="trash-footer">
+          <button class="icon-button danger-button hidden" id="trashClearAll" type="button">Delete all</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="write-sheet hidden" id="settingsSheet" aria-label="Settings">
+      <div class="write-backdrop" id="settingsBackdrop"></div>
+      <form class="write-panel" id="settingsForm">
+        <div class="write-header">
+          <div>
+            <h2>Settings</h2>
+            <p id="settingsSubtitle">Set the credentials used to secure the dashboard.</p>
+          </div>
+          <button class="icon-button" id="settingsClose" type="button">Close</button>
+        </div>
+        <label>
+          <span>Username <span class="required-marker">*</span></span>
+          <input id="settingsUsername" required maxlength="64" autocomplete="username" />
+        </label>
+        <label class="hidden" id="settingsCurrentRow">
+          <span>Current password <span class="required-marker">*</span></span>
+          <input id="settingsCurrentPassword" type="password" autocomplete="current-password" />
+        </label>
+        <div class="write-grid">
+          <label>
+            <span>New password <span class="required-marker">*</span></span>
+            <input id="settingsPassword" type="password" minlength="8" required autocomplete="new-password" />
+          </label>
+          <label>
+            <span>Confirm password <span class="required-marker">*</span></span>
+            <input id="settingsPasswordConfirm" type="password" minlength="8" required autocomplete="new-password" />
+            <small class="field-error hidden" id="settingsMatchError">Passwords don't match.</small>
+          </label>
+        </div>
+        <div class="write-actions-row" style="justify-content: space-between;">
+          <button class="icon-button danger-button" id="logoutBtn" type="button">Sign out</button>
+          <button class="primary-action save-memory" id="saveSettings" type="submit">Save</button>
+        </div>
+        <div class="write-status" id="settingsStatus"></div>
+      </form>
+    </section>
+
+    <section class="write-sheet hidden" id="factSheet" aria-label="Add fact">
+      <div class="write-backdrop" id="factBackdrop"></div>
+      <form class="write-panel" id="factForm">
+        <div class="write-header">
+          <div>
+            <h2 id="factSheetTitle">Add fact</h2>
+            <p>Subject → predicate → object. Source drawer is optional.</p>
+          </div>
+          <button class="icon-button" id="factClose" type="button">Close</button>
+        </div>
+        <label><span>Subject</span><input id="factSubject" required maxlength="200" autocomplete="off" /></label>
+        <label><span>Predicate</span><input id="factPredicate" required maxlength="200" autocomplete="off" /></label>
+        <label><span>Object</span><input id="factObject" required maxlength="200" autocomplete="off" /></label>
+        <div class="write-grid">
+          <label><span>Valid from</span><input id="factValidFrom" placeholder="YYYY-MM-DD" autocomplete="off" /></label>
+          <label><span>Source drawer ID</span><input id="factSource" placeholder="drawer_..." autocomplete="off" /></label>
+        </div>
+        <button class="primary-action save-memory" id="saveFact" type="submit">Add fact</button>
+        <div class="write-status" id="factStatus"></div>
+      </form>
+    </section>
+
+    <script src="/app.js?v=23"></script>
+  </body>
+</html>
