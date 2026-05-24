@@ -43,6 +43,7 @@ SESSION_DURATION_SHORT = timedelta(hours=12)
 SESSION_DURATION_LONG = timedelta(days=30)
 MEMPALACE_PYTHON = _env_path("MEMPALACE_PYTHON_BIN", Path.home() / ".local" / "share" / "mempalace-venv" / "bin" / "python")
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+TUNNEL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.\-]{0,127}$")
 USERNAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.@-]{0,62}$")
 AUTH_TOKEN = os.environ.get("MEMPALACE_TOKEN", "").strip()
 
@@ -1136,10 +1137,25 @@ def commit_draft(payload: dict) -> dict:
 # `result.get("success")` because read-style tools return data dicts directly.
 
 
-_MCP_MARKER = "__MCP_RESULT__"
+_MCP_DEFAULT_TIMEOUT = 60
+# Per-tool subprocess timeout overrides (seconds). Tools that touch the
+# embedding model or mine project trees need more headroom than the
+# 60-second default.
+_MCP_TIMEOUTS: dict[str, int] = {
+    "tool_sync": 300,
+    "tool_check_duplicate": 120,
+    "tool_kg_query": 120,
+    "tool_kg_timeline": 120,
+    "tool_kg_stats": 120,
+    "tool_graph_stats": 120,
+    "tool_traverse_graph": 120,
+}
 
 
-def mcp_call(tool_name: str, **kwargs) -> dict:
+def mcp_call(tool_name: str, *, timeout: int | None = None, **kwargs) -> dict:
+    # Fresh nonce per call: avoids any chance that a tool's own output
+    # collides with the result marker.
+    marker = f"__MCP_RESULT_{secrets.token_hex(8)}__"
     payload = {k: v for k, v in kwargs.items() if v is not None}
     code = (
         "import json, sys\n"
@@ -1150,7 +1166,7 @@ def mcp_call(tool_name: str, **kwargs) -> dict:
         "    result = {'items': result}\n"
         "elif not isinstance(result, dict):\n"
         "    result = {'value': result}\n"
-        f"sys.stdout.write({_MCP_MARKER!r})\n"
+        f"sys.stdout.write({marker!r})\n"
         "json.dump(result, sys.stdout, default=str)\n"
         "sys.stdout.write('\\n')\n"
     )
@@ -1159,7 +1175,7 @@ def mcp_call(tool_name: str, **kwargs) -> dict:
         input=json.dumps(payload),
         text=True,
         capture_output=True,
-        timeout=60,
+        timeout=timeout if timeout is not None else _MCP_TIMEOUTS.get(tool_name, _MCP_DEFAULT_TIMEOUT),
         check=False,
     )
     if proc.returncode != 0:
@@ -1171,10 +1187,10 @@ def mcp_call(tool_name: str, **kwargs) -> dict:
     for stream in (proc.stdout, proc.stderr):
         if not stream:
             continue
-        idx = stream.rfind(_MCP_MARKER)
+        idx = stream.rfind(marker)
         if idx < 0:
             continue
-        body = stream[idx + len(_MCP_MARKER):].strip()
+        body = stream[idx + len(marker):].strip()
         # Strip ANSI color escapes that onnxruntime emits before the marker
         # may also wrap the body; trim everything after the JSON close.
         if body.startswith("{"):
@@ -1302,10 +1318,44 @@ def create_tunnel_endpoint(payload: dict) -> dict:
     )
 
 
+def _find_tunnel(tunnel_id: str) -> dict | None:
+    try:
+        result = mcp_call("tool_list_tunnels")
+    except (RuntimeError, subprocess.TimeoutExpired):
+        return None
+    candidates = result.get("items") or result.get("tunnels") or []
+    if not isinstance(candidates, list):
+        return None
+    for tunnel in candidates:
+        if not isinstance(tunnel, dict):
+            continue
+        identifier = str(tunnel.get("tunnel_id") or tunnel.get("id") or "")
+        if identifier == tunnel_id:
+            return tunnel
+    return None
+
+
+def log_tunnel_version(action: str, tunnel: dict) -> None:
+    record = {
+        "action": action,
+        "kind": "tunnel",
+        "logged_at": datetime.now().isoformat(timespec="seconds"),
+        "tunnel": tunnel,
+    }
+    VERSIONS_LOG.parent.mkdir(parents=True, exist_ok=True)
+    with VERSIONS_LOG.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
 def delete_tunnel_endpoint(payload: dict) -> dict:
     tunnel_id = str(payload.get("tunnel_id", "")).strip()
     if not tunnel_id:
         raise ValueError("tunnel_id is required.")
+    if not TUNNEL_ID_RE.match(tunnel_id):
+        raise ValueError("tunnel_id contains invalid characters.")
+    # Snapshot before destruction, matching the drawer-delete flow.
+    snapshot = _find_tunnel(tunnel_id) or {"tunnel_id": tunnel_id, "note": "snapshot lookup failed"}
+    log_tunnel_version("delete_tunnel", snapshot)
     return mcp_call("tool_delete_tunnel", tunnel_id=tunnel_id)
 
 

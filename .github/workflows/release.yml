@@ -34,13 +34,18 @@ jobs:
           python -m pip install --upgrade pip build
           python -m build
 
-      - name: Verify the version in pyproject.toml matches the git tag
+      - name: Verify the git tag matches pyproject.toml AND the package __version__
         run: |
           tag="${GITHUB_REF_NAME#v}"
           pkg_version=$(python -c "import tomllib,pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
-          echo "tag=$tag pyproject=$pkg_version"
+          runtime_version=$(python -c "import re,pathlib; m=re.search(r'__version__\s*=\s*[\"\\']([^\"\\']+)', pathlib.Path('mempalace_dashboard/__init__.py').read_text()); print(m.group(1) if m else '')")
+          echo "tag=$tag pyproject=$pkg_version runtime=$runtime_version"
           if [ "$tag" != "$pkg_version" ]; then
             echo "::error::tag $tag does not match pyproject.toml version $pkg_version" >&2
+            exit 1
+          fi
+          if [ "$tag" != "$runtime_version" ]; then
+            echo "::error::tag $tag does not match mempalace_dashboard.__version__ ($runtime_version)" >&2
             exit 1
           fi
 

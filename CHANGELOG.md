@@ -8,6 +8,20 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 _No unreleased changes._
 
+## [0.4.1] — 2026-05-24
+
+### Added
+- `README.md` now documents every Lab endpoint introduced in 0.4.0 (knowledge-graph query / timeline / stats, taxonomy, diary read/write, tunnel CRUD + traverse, duplicate check, hook settings, sync, reconnect, AAAK spec) and lists the Lab panel under Features.
+
+### Changed
+- **Per-tool MCP timeouts.** `mcp_call` now picks a per-tool subprocess timeout (default 60 s, 120 s for embedding-touching tools, 300 s for `tool_sync`) instead of a flat 60 s, so a real codebase sync no longer 504s.
+- **Random per-call marker.** The MCP result marker is now a fresh `__MCP_RESULT_<random-hex>__` per call rather than a fixed string, so a tool that happens to emit the literal marker text in its own output can't confuse the parser.
+
+### Fixed
+- **Snapshot before tunnel deletion.** `/api/tunnels/delete` now records the tunnel's metadata to the versions log before invoking `tool_delete_tunnel`, restoring the project's "snapshot before destruction" promise for the Lab write surface.
+- **`tunnel_id` validation.** The delete endpoint now enforces a bounded character set on `tunnel_id` (alphanumeric + `_.-`, max 128 chars) instead of accepting whatever string the client sends.
+- **Version drift between wheel and runtime.** v0.4.0 bumped `pyproject.toml` to 0.4.0 but left `mempalace_dashboard.__version__` at `0.3.3`. CI also passed because the verify-tag step only checks `pyproject.toml`. 0.4.1 brings both in sync (`__version__ = "0.4.1"`); the release workflow continues to verify the tag against `pyproject.toml`, which is the source of truth for the wheel.
+
 ## [0.4.0] — 2026-05-24
 
 ### Added
@@ -91,7 +105,9 @@ _No unreleased changes._
 - URL state for current wing / room / drawer / query / sort.
 - Keyboard shortcuts (`⌘K`, `Esc`, `R`).
 
-[Unreleased]: https://github.com/epinethrone/mempalace-frontend/compare/v0.3.3...HEAD
+[Unreleased]: https://github.com/epinethrone/mempalace-frontend/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/epinethrone/mempalace-frontend/compare/v0.4.0...v0.4.1
+[0.4.0]: https://github.com/epinethrone/mempalace-frontend/compare/v0.3.3...v0.4.0
 [0.3.3]: https://github.com/epinethrone/mempalace-frontend/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/epinethrone/mempalace-frontend/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/epinethrone/mempalace-frontend/compare/v0.3.0...v0.3.1
