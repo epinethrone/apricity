@@ -37,7 +37,7 @@
     />
     <meta name="twitter:image" content="/mempalace-logo.png" />
 
-    <link rel="stylesheet" href="/styles.css?v=47" />
+    <link rel="stylesheet" href="/styles.css?v=48" />
   </head>
   <body>
     <div class="shell">
@@ -88,6 +88,7 @@
           </div>
           <div class="top-actions">
             <button class="icon-button toolbar-button" id="draftsBtn" type="button" aria-label="View drafts" title="Drafts">Drafts<span class="badge hidden" id="draftsBadge">0</span></button>
+            <button class="icon-button toolbar-button" id="labBtn" type="button" aria-label="Open Lab" title="MemPalace Lab">Lab</button>
             <button class="icon-button toolbar-button icon-only" id="trashBtn" type="button" aria-label="View trash" title="Recently deleted">
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M5 7h14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" fill="none"/>
@@ -481,6 +482,248 @@
       </form>
     </section>
 
-    <script src="/app.js?v=47"></script>
+    <section class="write-sheet hidden" id="labSheet" aria-label="MemPalace Lab">
+      <div class="write-backdrop" id="labBackdrop"></div>
+      <div class="write-panel lab-panel">
+        <div class="write-header">
+          <div>
+            <h2>Lab</h2>
+            <p>Knowledge graph, tunnels, diary, and maintenance — every MemPalace tool, one panel.</p>
+          </div>
+          <button class="icon-button" id="labClose" type="button">Close</button>
+        </div>
+        <div class="lab-tabs" role="tablist" aria-label="Lab sections">
+          <button class="lab-tab active" type="button" data-lab-tab="kg" role="tab" aria-selected="true">Knowledge Graph</button>
+          <button class="lab-tab" type="button" data-lab-tab="timeline" role="tab" aria-selected="false">Timeline</button>
+          <button class="lab-tab" type="button" data-lab-tab="tunnels" role="tab" aria-selected="false">Tunnels</button>
+          <button class="lab-tab" type="button" data-lab-tab="diary" role="tab" aria-selected="false">Diary</button>
+          <button class="lab-tab" type="button" data-lab-tab="stats" role="tab" aria-selected="false">Stats</button>
+          <button class="lab-tab" type="button" data-lab-tab="maint" role="tab" aria-selected="false">Maintenance</button>
+        </div>
+
+        <div class="lab-body">
+          <section class="lab-pane active" data-lab-pane="kg">
+            <h3>Query an entity</h3>
+            <p class="lab-hint">See all facts touching an entity. Optionally pin a date or filter direction.</p>
+            <div class="lab-grid">
+              <label><span>Entity</span><input id="kgEntity" placeholder="e.g. Coco, MyProject, Alice" autocomplete="off" /></label>
+              <label>
+                <span>Direction</span>
+                <select id="kgDirection">
+                  <option value="both">Both</option>
+                  <option value="outgoing">Outgoing (entity → ?)</option>
+                  <option value="incoming">Incoming (? → entity)</option>
+                </select>
+              </label>
+              <label><span>As of</span><input id="kgAsOf" type="date" /></label>
+            </div>
+            <div class="lab-actions">
+              <button class="primary-action" type="button" id="kgRun">Query</button>
+            </div>
+            <div class="lab-output" id="kgOutput"></div>
+          </section>
+
+          <section class="lab-pane" data-lab-pane="timeline" hidden>
+            <h3>Fact timeline</h3>
+            <p class="lab-hint">Chronological story of an entity, or every fact ever filed if you leave it blank.</p>
+            <div class="lab-grid">
+              <label><span>Entity (optional)</span><input id="tlEntity" placeholder="leave blank for everything" autocomplete="off" /></label>
+            </div>
+            <div class="lab-actions">
+              <button class="primary-action" type="button" id="tlRun">Load timeline</button>
+            </div>
+            <div class="lab-output" id="tlOutput"></div>
+          </section>
+
+          <section class="lab-pane" data-lab-pane="tunnels" hidden>
+            <h3>Tunnels</h3>
+            <p class="lab-hint">Cross-wing typed links between rooms — the explicit hallways of the palace.</p>
+
+            <details class="lab-block" open>
+              <summary>Browse</summary>
+              <div class="lab-grid">
+                <label><span>Filter by wing (optional)</span><input id="tunListWing" placeholder="leave blank for all" autocomplete="off" /></label>
+              </div>
+              <div class="lab-actions">
+                <button class="primary-action" type="button" id="tunListRun">List tunnels</button>
+              </div>
+              <div class="lab-output" id="tunListOutput"></div>
+            </details>
+
+            <details class="lab-block">
+              <summary>Create tunnel</summary>
+              <div class="lab-grid">
+                <label><span>Source wing</span><input id="tunCreateSourceWing" autocomplete="off" /></label>
+                <label><span>Source room</span><input id="tunCreateSourceRoom" autocomplete="off" /></label>
+                <label><span>Target wing</span><input id="tunCreateTargetWing" autocomplete="off" /></label>
+                <label><span>Target room</span><input id="tunCreateTargetRoom" autocomplete="off" /></label>
+              </div>
+              <label><span>Label</span><input id="tunCreateLabel" placeholder="What does this connection mean?" autocomplete="off" /></label>
+              <div class="lab-grid">
+                <label><span>Source drawer id (optional)</span><input id="tunCreateSourceDrawer" placeholder="drawer_..." autocomplete="off" /></label>
+                <label><span>Target drawer id (optional)</span><input id="tunCreateTargetDrawer" placeholder="drawer_..." autocomplete="off" /></label>
+              </div>
+              <div class="lab-actions">
+                <button class="primary-action" type="button" id="tunCreateRun">Create</button>
+              </div>
+              <div class="lab-output" id="tunCreateOutput"></div>
+            </details>
+
+            <details class="lab-block">
+              <summary>Find tunnels between wings</summary>
+              <div class="lab-grid">
+                <label><span>Wing A (optional)</span><input id="tunFindA" autocomplete="off" /></label>
+                <label><span>Wing B (optional)</span><input id="tunFindB" autocomplete="off" /></label>
+              </div>
+              <div class="lab-actions">
+                <button class="primary-action" type="button" id="tunFindRun">Find</button>
+              </div>
+              <div class="lab-output" id="tunFindOutput"></div>
+            </details>
+
+            <details class="lab-block">
+              <summary>Follow tunnels from a room</summary>
+              <div class="lab-grid">
+                <label><span>Wing</span><input id="tunFollowWing" autocomplete="off" /></label>
+                <label><span>Room</span><input id="tunFollowRoom" autocomplete="off" /></label>
+              </div>
+              <div class="lab-actions">
+                <button class="primary-action" type="button" id="tunFollowRun">Follow</button>
+              </div>
+              <div class="lab-output" id="tunFollowOutput"></div>
+            </details>
+
+            <details class="lab-block">
+              <summary>Traverse graph</summary>
+              <div class="lab-grid">
+                <label><span>Start room</span><input id="tunTravRoom" autocomplete="off" /></label>
+                <label><span>Max hops</span><input id="tunTravHops" type="number" min="1" max="5" value="2" /></label>
+              </div>
+              <div class="lab-actions">
+                <button class="primary-action" type="button" id="tunTravRun">Traverse</button>
+              </div>
+              <div class="lab-output" id="tunTravOutput"></div>
+            </details>
+          </section>
+
+          <section class="lab-pane" data-lab-pane="diary" hidden>
+            <h3>Diary</h3>
+            <p class="lab-hint">Per-agent compressed (AAAK) journal across sessions.</p>
+
+            <details class="lab-block" open>
+              <summary>Read diary</summary>
+              <div class="lab-grid">
+                <label><span>Agent name</span><input id="diaryReadAgent" placeholder="e.g. claude" autocomplete="off" /></label>
+                <label><span>Last N entries</span><input id="diaryReadN" type="number" min="1" max="200" value="10" /></label>
+                <label><span>Wing (optional)</span><input id="diaryReadWing" placeholder="defaults to wing_{agent}" autocomplete="off" /></label>
+              </div>
+              <div class="lab-actions">
+                <button class="primary-action" type="button" id="diaryReadRun">Read</button>
+              </div>
+              <div class="lab-output" id="diaryReadOutput"></div>
+            </details>
+
+            <details class="lab-block">
+              <summary>Write diary entry</summary>
+              <div class="lab-grid">
+                <label><span>Agent name</span><input id="diaryWriteAgent" autocomplete="off" /></label>
+                <label><span>Topic</span><input id="diaryWriteTopic" placeholder="general" autocomplete="off" /></label>
+                <label><span>Wing (optional)</span><input id="diaryWriteWing" placeholder="defaults to wing_{agent}" autocomplete="off" /></label>
+              </div>
+              <label><span>Entry (AAAK)</span><textarea id="diaryWriteEntry" placeholder="SESSION:2026-05-24|built.lab.tabs|ALC.req:integrate.all.tools|★★★"></textarea></label>
+              <div class="lab-actions">
+                <button class="primary-action" type="button" id="diaryWriteRun">Write</button>
+              </div>
+              <div class="lab-output" id="diaryWriteOutput"></div>
+            </details>
+          </section>
+
+          <section class="lab-pane" data-lab-pane="stats" hidden>
+            <h3>Palace overview</h3>
+            <p class="lab-hint">Snapshots straight from MemPalace.</p>
+            <div class="lab-actions lab-actions-row">
+              <button class="icon-button toolbar-button" type="button" id="statsKgRun">Knowledge graph stats</button>
+              <button class="icon-button toolbar-button" type="button" id="statsGraphRun">Palace graph stats</button>
+              <button class="icon-button toolbar-button" type="button" id="statsCheckpointRun">Recent checkpoint</button>
+            </div>
+            <div class="lab-output" id="statsOutput"></div>
+          </section>
+
+          <section class="lab-pane" data-lab-pane="maint" hidden>
+            <h3>Maintenance</h3>
+            <p class="lab-hint">Taxonomy, hooks, sync, reconnect, dedup, AAAK reference.</p>
+
+            <details class="lab-block" open>
+              <summary>Taxonomy</summary>
+              <div class="lab-actions">
+                <button class="primary-action" type="button" id="taxonomyRun">Load taxonomy</button>
+              </div>
+              <div class="lab-output" id="taxonomyOutput"></div>
+            </details>
+
+            <details class="lab-block">
+              <summary>Check duplicate</summary>
+              <label><span>Content</span><textarea id="dupContent" placeholder="Paste a memory candidate to find similar drawers."></textarea></label>
+              <div class="lab-grid">
+                <label><span>Threshold</span><input id="dupThreshold" type="number" min="0" max="1" step="0.05" value="0.9" /></label>
+              </div>
+              <div class="lab-actions">
+                <button class="primary-action" type="button" id="dupRun">Check</button>
+              </div>
+              <div class="lab-output" id="dupOutput"></div>
+            </details>
+
+            <details class="lab-block">
+              <summary>Hook settings</summary>
+              <div class="lab-actions">
+                <button class="icon-button toolbar-button" type="button" id="hooksLoadRun">Load current</button>
+              </div>
+              <div class="lab-grid">
+                <label class="checkbox-row"><input type="checkbox" id="hookSilent" /><span>Silent save (skip blocking MCP)</span></label>
+                <label class="checkbox-row"><input type="checkbox" id="hookToast" /><span>Desktop toast (notify-send)</span></label>
+              </div>
+              <div class="lab-actions">
+                <button class="primary-action" type="button" id="hooksSaveRun">Save</button>
+              </div>
+              <div class="lab-output" id="hooksOutput"></div>
+            </details>
+
+            <details class="lab-block">
+              <summary>Sync (prune stale drawers)</summary>
+              <div class="lab-grid">
+                <label><span>Wing (optional)</span><input id="syncWing" autocomplete="off" /></label>
+                <label><span>Project dir (optional)</span><input id="syncDir" autocomplete="off" /></label>
+              </div>
+              <div class="lab-actions lab-actions-row">
+                <button class="icon-button toolbar-button" type="button" id="syncDryRun">Dry run</button>
+                <button class="danger-action" type="button" id="syncApplyRun">Apply</button>
+              </div>
+              <div class="lab-output" id="syncOutput"></div>
+            </details>
+
+            <details class="lab-block">
+              <summary>Reconnect palace</summary>
+              <p class="lab-hint">Force MemPalace to reload the HNSW index after external script writes.</p>
+              <div class="lab-actions">
+                <button class="primary-action" type="button" id="reconnectRun">Reconnect</button>
+              </div>
+              <div class="lab-output" id="reconnectOutput"></div>
+            </details>
+
+            <details class="lab-block">
+              <summary>AAAK spec reference</summary>
+              <div class="lab-actions">
+                <button class="primary-action" type="button" id="aaakRun">Load spec</button>
+              </div>
+              <div class="lab-output" id="aaakOutput"></div>
+            </details>
+          </section>
+        </div>
+      </div>
+    </section>
+
+
+    <script src="/app.js?v=48"></script>
+    <script src="/lab.js?v=1"></script>
   </body>
 </html>
