@@ -1,0 +1,65 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mempalace-dashboard"
+version = "0.3.0"
+description = "A local, zero-dependency web UI for browsing, editing, and curating a MemPalace personal-memory store."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [{ name = "MemPalace Dashboard contributors" }]
+keywords = [
+    "mempalace",
+    "ai-memory",
+    "knowledge-graph",
+    "local-first",
+    "dashboard",
+    "chromadb",
+    "mcp",
+    "second-brain",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Web Environment",
+    "Intended Audience :: Developers",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Database :: Front-Ends",
+    "Topic :: Internet :: WWW/HTTP :: HTTP Servers",
+    "Topic :: Office/Business",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Typing :: Typed",
+]
+# Runtime: standard library only.
+dependencies = []
+
+[project.urls]
+Homepage      = "https://github.com/epinethrone/mempalace-frontend"
+Repository    = "https://github.com/epinethrone/mempalace-frontend"
+Issues        = "https://github.com/epinethrone/mempalace-frontend/issues"
+Changelog     = "https://github.com/epinethrone/mempalace-frontend/blob/main/CHANGELOG.md"
+"Bug Tracker" = "https://github.com/epinethrone/mempalace-frontend/issues"
+"Source"      = "https://github.com/epinethrone/mempalace-frontend"
+
+[project.scripts]
+mempalace-dashboard = "mempalace_dashboard.server:main"
+
+[tool.setuptools.packages.find]
+include = ["mempalace_dashboard*"]
+exclude = ["tests*"]
+
+[tool.setuptools.package-data]
+mempalace_dashboard = [
+    "static/*.html",
+    "static/*.js",
+    "static/*.css",
+    "static/*.png",
+    "static/*.ico",
+]

@@ -1,0 +1,42 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build & smoke-check (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Compile-check the server module
+        run: python -m py_compile mempalace_dashboard/server.py
+
+      - name: Import-check the package
+        run: python -c "import mempalace_dashboard; print(mempalace_dashboard.__version__)"
+
+      - name: Build sdist + wheel
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build
+
+      - name: Smoke-test the wheel
+        run: |
+          python -m pip install dist/*.whl
+          python -c "from mempalace_dashboard.server import main; print('entry point importable')"
+          python -c "import importlib.resources as r; assert (r.files('mempalace_dashboard') / 'static' / 'index.html').is_file(), 'static assets missing from wheel'"
