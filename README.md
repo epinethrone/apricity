@@ -10,10 +10,11 @@
 
   <p>
     <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg" /></a>
+    <a href="https://pypi.org/project/mempalace-dashboard/"><img alt="PyPI" src="https://img.shields.io/pypi/v/mempalace-dashboard.svg?label=pypi" /></a>
     <img alt="Python 3.11+" src="https://img.shields.io/badge/python-3.11%2B-3776ab.svg" />
     <img alt="No runtime dependencies" src="https://img.shields.io/badge/runtime-stdlib%20only-brightgreen.svg" />
     <img alt="Local-first" src="https://img.shields.io/badge/data-local--first-success.svg" />
-    <img alt="Status: active" src="https://img.shields.io/badge/status-active-success.svg" />
+    <a href="https://github.com/epinethrone/mempalace-frontend/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/epinethrone/mempalace-frontend?include_prereleases&sort=semver" /></a>
   </p>
 </div>
 
@@ -71,15 +72,29 @@
 
 ### Install & run
 
+Pick whichever fits how you already manage Python tools:
+
 ```bash
+# Recommended — isolated install via pipx (or `uv tool install`):
+pipx install mempalace-dashboard
+mempalace-dashboard
+```
+
+```bash
+# Or run from a clone — no install step required:
 git clone https://github.com/epinethrone/mempalace-frontend mempalace-dashboard
 cd mempalace-dashboard
-python3 server.py
+python3 server.py            # equivalent to `python -m mempalace_dashboard`
+```
+
+```bash
+# Or grab the zipapp / wheel from a GitHub Release:
+# https://github.com/epinethrone/mempalace-frontend/releases
 ```
 
 Then open <http://127.0.0.1:8765>.
 
-That's it — there's no build step. If your MemPalace install lives somewhere non-standard, copy `.env.example` to `.env` (or export the variables in your shell) and adjust the paths before launching.
+There's no build step and no third-party runtime dependencies — the package is published purely so installing it is one command. If your MemPalace install lives somewhere non-standard, copy [`.env.example`](.env.example) to `.env` (or export the variables in your shell) and adjust the paths before launching.
 
 ### First-run checklist
 

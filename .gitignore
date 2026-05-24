@@ -7,6 +7,14 @@ __pycache__/
 venv/
 env/
 
+# Build artefacts
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+pip-wheel-metadata/
+
 .DS_Store
 Thumbs.db
 

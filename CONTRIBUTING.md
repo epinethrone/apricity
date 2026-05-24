@@ -30,16 +30,22 @@ There is no `requirements.txt`, no virtualenv, no compile step. If your change i
 
 ```
 .
-├── server.py            # The entire backend: HTTP server, auth, snapshots, mempalace bridge.
-├── static/
-│   ├── index.html       # Single-page shell — every panel and sheet lives here.
-│   ├── app.js           # All frontend behaviour. No framework.
-│   ├── styles.css       # All styling. CSS custom properties drive the theme.
-│   └── *.png / *.ico    # Logo and favicons.
-├── .env.example         # Documented environment variables.
-├── README.md            # User-facing docs.
-├── SECURITY.md          # Threat model + disclosure process.
-└── CHANGELOG.md         # Notable user-visible changes per release.
+├── mempalace_dashboard/        # The installable package.
+│   ├── __init__.py             # Exposes __version__.
+│   ├── __main__.py             # `python -m mempalace_dashboard` entry point.
+│   ├── server.py               # The entire backend: HTTP server, auth, snapshots, mempalace bridge.
+│   └── static/
+│       ├── index.html          # Single-page shell — every panel and sheet lives here.
+│       ├── app.js              # All frontend behaviour. No framework.
+│       ├── styles.css          # All styling. CSS custom properties drive the theme.
+│       └── *.png / *.ico       # Logo and favicons.
+├── server.py                   # Compatibility shim — keeps `python3 server.py` working from a clone.
+├── pyproject.toml              # Packaging metadata and the `mempalace-dashboard` console script.
+├── .env.example                # Documented environment variables.
+├── .github/                    # Issue templates, PR template, CI + release workflows.
+├── README.md                   # User-facing docs.
+├── SECURITY.md                 # Threat model + disclosure process.
+└── CHANGELOG.md                # Notable user-visible changes per release.
 ```
 
 If you add a new API route, please:
