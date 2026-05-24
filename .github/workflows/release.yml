@@ -69,11 +69,6 @@ jobs:
     name: Publish to PyPI (trusted publisher)
     needs: [build]
     runs-on: ubuntu-latest
-    # The `pypi` environment must exist in repo settings and be configured
-    # as the pending publisher on pypi.org. Until that's set up this job
-    # will fail without affecting the GitHub Release above — flip the flag
-    # below to `false` once you've registered the trusted publisher.
-    if: ${{ false }}
     environment:
       name: pypi
       url: https://pypi.org/p/mempalace-dashboard
