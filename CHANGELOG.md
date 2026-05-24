@@ -8,6 +8,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 _No unreleased changes._
 
+## [0.3.3] — 2026-05-24
+
+### Changed
+- `release.yml` workflow: pass `append_body: false` to `softprops/action-gh-release` so re-runs and tag force-pushes don't pile up duplicate "Full Changelog" lines on the release body.
+- `release.yml` workflow: add a `workflow_dispatch` trigger so the release can be re-triggered manually from the Actions UI without force-pushing a tag.
+
+### Fixed
+- After the email-scrub history rewrite force-pushed every tag, the v0.3.1 release workflow re-fired with its frozen (pre-`skip-existing`) PyPI step and turned the `pypi` deployment indicator red. This release publishes a clean v0.3.3 so the most-recent `pypi` deployment is green again.
+
 ## [0.3.2] — 2026-05-24
 
 ### Fixed
@@ -69,7 +78,8 @@ _No unreleased changes._
 - URL state for current wing / room / drawer / query / sort.
 - Keyboard shortcuts (`⌘K`, `Esc`, `R`).
 
-[Unreleased]: https://github.com/epinethrone/mempalace-frontend/compare/v0.3.2...HEAD
+[Unreleased]: https://github.com/epinethrone/mempalace-frontend/compare/v0.3.3...HEAD
+[0.3.3]: https://github.com/epinethrone/mempalace-frontend/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/epinethrone/mempalace-frontend/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/epinethrone/mempalace-frontend/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/epinethrone/mempalace-frontend/compare/v0.2.0...v0.3.0
