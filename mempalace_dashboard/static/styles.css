@@ -2632,3 +2632,313 @@ input.invalid-mismatch {
     gap: 12px;
   }
 }
+/* ---------- Lab ---------- */
+.lab-panel {
+  width: min(960px, 100%);
+  max-height: min(880px, calc(100vh - 32px));
+}
+
+.lab-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px;
+  background: var(--accent-soft);
+  border-radius: 14px;
+}
+
+.lab-tab {
+  flex: 1 1 auto;
+  min-width: 110px;
+  padding: 8px 14px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.lab-tab:hover {
+  color: var(--text);
+}
+
+.lab-tab.active {
+  background: var(--surface-strong);
+  color: var(--text);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+.lab-body {
+  display: grid;
+  gap: 16px;
+}
+
+.lab-pane[hidden] {
+  display: none;
+}
+
+.lab-pane h3 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.lab-hint {
+  margin: -4px 0 4px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.lab-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.lab-pane label {
+  display: grid;
+  gap: 4px;
+  font-size: 13px;
+}
+
+.lab-pane label > span {
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.lab-pane input,
+.lab-pane select,
+.lab-pane textarea {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+.lab-pane textarea {
+  min-height: 90px;
+  resize: vertical;
+}
+
+.lab-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.lab-actions-row {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+
+.lab-output {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  min-height: 44px;
+  max-height: 400px;
+  overflow: auto;
+}
+
+.lab-output:empty::before {
+  content: "Results appear here.";
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.lab-loading {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.lab-error {
+  color: #b00020;
+  background: rgba(176, 0, 32, 0.08);
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.lab-empty {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.lab-summary {
+  font-size: 12px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.lab-json,
+.lab-spec {
+  margin: 0;
+  padding: 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 12px;
+  background: var(--bg);
+  border-radius: 8px;
+}
+
+.lab-block {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: var(--surface);
+  display: grid;
+  gap: 10px;
+}
+
+.lab-block summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 14px;
+  list-style: none;
+  user-select: none;
+}
+
+.lab-block summary::marker,
+.lab-block summary::-webkit-details-marker { display: none; }
+
+.lab-block summary::before {
+  content: "▸";
+  display: inline-block;
+  margin-right: 6px;
+  color: var(--muted);
+  transition: transform 0.15s ease;
+}
+
+.lab-block[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.lab-fact,
+.lab-tunnel,
+.lab-diary,
+.lab-dup,
+.lab-timeline-row {
+  padding: 8px 10px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  display: grid;
+  gap: 4px;
+}
+
+.lab-fact-spo {
+  font-size: 14px;
+}
+
+.lab-fact-spo em {
+  color: var(--muted);
+  font-style: normal;
+}
+
+.lab-fact-meta,
+.lab-tunnel-meta,
+.lab-diary-head,
+.lab-dup-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.lab-pill {
+  display: inline-block;
+  padding: 1px 8px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.lab-pill-warn {
+  background: rgba(176, 0, 32, 0.12);
+  color: #b00020;
+}
+
+.lab-timeline-row {
+  grid-template-columns: 110px 1fr;
+  align-items: center;
+}
+
+.lab-timeline-date {
+  font-size: 12px;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
+.lab-tunnel-route {
+  font-size: 14px;
+}
+
+.lab-tunnel-label {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.lab-arrow {
+  color: var(--accent);
+  margin: 0 4px;
+}
+
+.lab-tunnel-del {
+  margin-left: auto;
+  padding: 2px 8px;
+  font-size: 11px;
+}
+
+.lab-tax-wing {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: var(--surface);
+}
+
+.lab-tax-wing summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.lab-tax-wing ul {
+  list-style: none;
+  padding: 6px 0 0 12px;
+  margin: 6px 0 0;
+  display: grid;
+  gap: 4px;
+  font-size: 13px;
+}
+
+.lab-diary-body,
+.lab-dup-body {
+  margin: 0;
+  padding: 6px 8px;
+  background: var(--bg);
+  border-radius: 8px;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+body.lab-open {
+  overflow: hidden;
+}
+

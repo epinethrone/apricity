@@ -8,6 +8,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 _No unreleased changes._
 
+## [0.4.0] — 2026-05-24
+
+### Added
+- **Lab panel** — new top-bar entry that surfaces every previously-unused MemPalace MCP tool in one sheet with six tabs:
+  - **Knowledge Graph** — query an entity, with direction filter (both / outgoing / incoming) and an `as_of` date pin.
+  - **Timeline** — chronological view of an entity's facts (or the whole palace).
+  - **Tunnels** — list, create, delete, find between wings, follow from a room, and graph-traverse from a starting room with a configurable hop budget.
+  - **Diary** — read agent-specific AAAK diary entries and write new ones.
+  - **Stats** — knowledge-graph stats, palace graph stats, recent-checkpoint state.
+  - **Maintenance** — taxonomy tree, duplicate check, hook settings (silent-save / desktop-toast toggles), sync (dry-run + apply), force-reconnect, AAAK spec reference.
+- Generic `mcp_call(tool_name, **kwargs)` dispatcher in the server: any MemPalace tool callable through one helper. Marker-based parser scans both stdout and stderr so the embedding library's chatter on stderr doesn't swallow the response.
+- New JSON endpoints (auth-gated like the rest): `/api/kg/query`, `/api/kg/stats`, `/api/kg/timeline`, `/api/graph/stats`, `/api/taxonomy`, `/api/checkpoint`, `/api/aaak-spec`, `/api/diary` (GET/POST), `/api/tunnels` (GET/POST), `/api/tunnels/delete`, `/api/tunnels/find`, `/api/tunnels/follow`, `/api/traverse`, `/api/check-duplicate`, `/api/hooks` (GET/POST), `/api/sync`, `/api/reconnect`.
+
 ## [0.3.3] — 2026-05-24
 
 ### Changed

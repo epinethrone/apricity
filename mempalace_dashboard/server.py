@@ -1126,6 +1126,239 @@ def commit_draft(payload: dict) -> dict:
     return {"success": True, "result": result, "archived": str(archived)}
 
 
+# ---------------------------------------------------------------------------
+# Generic MCP-tool dispatcher + Lab endpoints
+# ---------------------------------------------------------------------------
+#
+# Every MemPalace MCP tool is callable via `mcp_call(tool_name, **kwargs)`.
+# The helpers below wrap each Lab-surface endpoint, validate inputs minimally,
+# and route to the right tool. Lab endpoints intentionally do NOT enforce
+# `result.get("success")` because read-style tools return data dicts directly.
+
+
+_MCP_MARKER = "__MCP_RESULT__"
+
+
+def mcp_call(tool_name: str, **kwargs) -> dict:
+    payload = {k: v for k, v in kwargs.items() if v is not None}
+    code = (
+        "import json, sys\n"
+        f"from mempalace.mcp_server import {tool_name}\n"
+        "payload = json.load(sys.stdin)\n"
+        f"result = {tool_name}(**payload)\n"
+        "if isinstance(result, list):\n"
+        "    result = {'items': result}\n"
+        "elif not isinstance(result, dict):\n"
+        "    result = {'value': result}\n"
+        f"sys.stdout.write({_MCP_MARKER!r})\n"
+        "json.dump(result, sys.stdout, default=str)\n"
+        "sys.stdout.write('\\n')\n"
+    )
+    proc = subprocess.run(
+        [str(MEMPALACE_PYTHON), "-c", code],
+        input=json.dumps(payload),
+        text=True,
+        capture_output=True,
+        timeout=60,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(
+            proc.stderr.strip() or proc.stdout.strip() or f"MemPalace {tool_name} failed."
+        )
+    # MemPalace's embedding deps print to stderr and sometimes redirect
+    # stdout, so the marker can land in either stream. Check both.
+    for stream in (proc.stdout, proc.stderr):
+        if not stream:
+            continue
+        idx = stream.rfind(_MCP_MARKER)
+        if idx < 0:
+            continue
+        body = stream[idx + len(_MCP_MARKER):].strip()
+        # Strip ANSI color escapes that onnxruntime emits before the marker
+        # may also wrap the body; trim everything after the JSON close.
+        if body.startswith("{"):
+            depth = 0
+            end = -1
+            in_string = False
+            escape = False
+            for i, ch in enumerate(body):
+                if in_string:
+                    if escape:
+                        escape = False
+                    elif ch == "\\":
+                        escape = True
+                    elif ch == '"':
+                        in_string = False
+                    continue
+                if ch == '"':
+                    in_string = True
+                elif ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        end = i + 1
+                        break
+            if end > 0:
+                body = body[:end]
+        try:
+            return json.loads(body)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                f"MemPalace {tool_name} returned non-JSON: {body[:200]}"
+            ) from exc
+    combined = ((proc.stdout or "") + (proc.stderr or "")).strip().splitlines()[-3:]
+    raise RuntimeError(
+        f"Unexpected MemPalace response for {tool_name}: " + " | ".join(combined)
+    )
+
+
+def _qs_first(query: dict, key: str, default: str | None = None) -> str | None:
+    values = query.get(key) or []
+    if not values:
+        return default
+    value = values[0]
+    return value if value not in (None, "") else default
+
+
+def kg_query_endpoint(query: dict) -> dict:
+    entity = (_qs_first(query, "entity") or "").strip()
+    if not entity:
+        raise ValueError("entity is required.")
+    direction = _qs_first(query, "direction")
+    as_of = _qs_first(query, "as_of")
+    return mcp_call("tool_kg_query", entity=entity, direction=direction, as_of=as_of)
+
+
+def kg_timeline_endpoint(query: dict) -> dict:
+    entity = _qs_first(query, "entity")
+    return mcp_call("tool_kg_timeline", entity=entity)
+
+
+def diary_read_endpoint(query: dict) -> dict:
+    agent = (_qs_first(query, "agent_name") or "").strip()
+    if not agent:
+        raise ValueError("agent_name is required.")
+    last_n_raw = _qs_first(query, "last_n", "10") or "10"
+    try:
+        last_n = max(1, min(int(last_n_raw), 200))
+    except (TypeError, ValueError):
+        last_n = 10
+    wing = _qs_first(query, "wing")
+    return mcp_call("tool_diary_read", agent_name=agent, last_n=last_n, wing=wing)
+
+
+def diary_write_endpoint(payload: dict) -> dict:
+    agent = str(payload.get("agent_name", "")).strip()
+    entry = str(payload.get("entry", "")).strip()
+    if not agent:
+        raise ValueError("agent_name is required.")
+    if not entry:
+        raise ValueError("entry is required.")
+    topic = str(payload.get("topic", "")).strip() or "general"
+    wing = str(payload.get("wing", "")).strip() or None
+    return mcp_call("tool_diary_write", agent_name=agent, entry=entry, topic=topic, wing=wing)
+
+
+def list_tunnels_endpoint(query: dict) -> dict:
+    wing = _qs_first(query, "wing")
+    return mcp_call("tool_list_tunnels", wing=wing)
+
+
+def find_tunnels_endpoint(query: dict) -> dict:
+    wing_a = _qs_first(query, "wing_a")
+    wing_b = _qs_first(query, "wing_b")
+    return mcp_call("tool_find_tunnels", wing_a=wing_a, wing_b=wing_b)
+
+
+def follow_tunnels_endpoint(query: dict) -> dict:
+    wing = (_qs_first(query, "wing") or "").strip()
+    room = (_qs_first(query, "room") or "").strip()
+    if not wing or not room:
+        raise ValueError("wing and room are required.")
+    return mcp_call("tool_follow_tunnels", wing=wing, room=room)
+
+
+def create_tunnel_endpoint(payload: dict) -> dict:
+    required = ("source_wing", "source_room", "target_wing", "target_room")
+    args: dict[str, str] = {}
+    for key in required:
+        value = str(payload.get(key, "")).strip()
+        if not value:
+            raise ValueError(f"{key} is required.")
+        if not NAME_RE.match(value):
+            raise ValueError(f"{key} contains invalid characters.")
+        args[key] = value
+    label = str(payload.get("label", "")).strip() or None
+    source_drawer_id = str(payload.get("source_drawer_id", "")).strip() or None
+    target_drawer_id = str(payload.get("target_drawer_id", "")).strip() or None
+    return mcp_call(
+        "tool_create_tunnel",
+        label=label,
+        source_drawer_id=source_drawer_id,
+        target_drawer_id=target_drawer_id,
+        **args,
+    )
+
+
+def delete_tunnel_endpoint(payload: dict) -> dict:
+    tunnel_id = str(payload.get("tunnel_id", "")).strip()
+    if not tunnel_id:
+        raise ValueError("tunnel_id is required.")
+    return mcp_call("tool_delete_tunnel", tunnel_id=tunnel_id)
+
+
+def traverse_endpoint(query: dict) -> dict:
+    start_room = (_qs_first(query, "start_room") or "").strip()
+    if not start_room:
+        raise ValueError("start_room is required.")
+    max_hops_raw = _qs_first(query, "max_hops", "2") or "2"
+    try:
+        max_hops = max(1, min(int(max_hops_raw), 5))
+    except (TypeError, ValueError):
+        max_hops = 2
+    return mcp_call("tool_traverse_graph", start_room=start_room, max_hops=max_hops)
+
+
+def check_duplicate_endpoint(payload: dict) -> dict:
+    content = str(payload.get("content", "")).strip()
+    if not content:
+        raise ValueError("content is required.")
+    try:
+        threshold = float(payload.get("threshold", 0.9))
+    except (TypeError, ValueError):
+        threshold = 0.9
+    threshold = max(0.0, min(threshold, 1.0))
+    return mcp_call("tool_check_duplicate", content=content, threshold=threshold)
+
+
+def hook_settings_get_endpoint() -> dict:
+    return mcp_call("tool_hook_settings")
+
+
+def hook_settings_set_endpoint(payload: dict) -> dict:
+    kwargs: dict[str, bool] = {}
+    if "silent_save" in payload:
+        kwargs["silent_save"] = bool(payload.get("silent_save"))
+    if "desktop_toast" in payload:
+        kwargs["desktop_toast"] = bool(payload.get("desktop_toast"))
+    if not kwargs:
+        raise ValueError("Provide silent_save and/or desktop_toast.")
+    return mcp_call("tool_hook_settings", **kwargs)
+
+
+def sync_endpoint(payload: dict) -> dict:
+    apply_changes = bool(payload.get("apply", False))
+    wing = str(payload.get("wing", "")).strip() or None
+    project_dir = str(payload.get("project_dir", "")).strip() or None
+    return mcp_call("tool_sync", apply=apply_changes, wing=wing, project_dir=project_dir)
+
+
+def reconnect_endpoint(_payload: dict | None = None) -> dict:
+    return mcp_call("tool_reconnect")
+
+
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(ROOT / "static"), **kwargs)
@@ -1231,6 +1464,51 @@ class Handler(SimpleHTTPRequestHandler):
             if parsed.path == "/api/export":
                 self.respond_json(build_export())
                 return
+            # ---- Lab endpoints (read-side) ------------------------------------
+            try:
+                query = parse_qs(parsed.query)
+                if parsed.path == "/api/kg/query":
+                    self.respond_json(kg_query_endpoint(query))
+                    return
+                if parsed.path == "/api/kg/stats":
+                    self.respond_json(mcp_call("tool_kg_stats"))
+                    return
+                if parsed.path == "/api/kg/timeline":
+                    self.respond_json(kg_timeline_endpoint(query))
+                    return
+                if parsed.path == "/api/graph/stats":
+                    self.respond_json(mcp_call("tool_graph_stats"))
+                    return
+                if parsed.path == "/api/taxonomy":
+                    self.respond_json(mcp_call("tool_get_taxonomy"))
+                    return
+                if parsed.path == "/api/checkpoint":
+                    self.respond_json(mcp_call("tool_memories_filed_away"))
+                    return
+                if parsed.path == "/api/aaak-spec":
+                    self.respond_json(mcp_call("tool_get_aaak_spec"))
+                    return
+                if parsed.path == "/api/diary":
+                    self.respond_json(diary_read_endpoint(query))
+                    return
+                if parsed.path == "/api/tunnels":
+                    self.respond_json(list_tunnels_endpoint(query))
+                    return
+                if parsed.path == "/api/tunnels/find":
+                    self.respond_json(find_tunnels_endpoint(query))
+                    return
+                if parsed.path == "/api/tunnels/follow":
+                    self.respond_json(follow_tunnels_endpoint(query))
+                    return
+                if parsed.path == "/api/traverse":
+                    self.respond_json(traverse_endpoint(query))
+                    return
+                if parsed.path == "/api/hooks":
+                    self.respond_json(hook_settings_get_endpoint())
+                    return
+            except (ValueError, RuntimeError, subprocess.TimeoutExpired) as exc:
+                self.respond_json({"success": False, "error": str(exc)}, status=400)
+                return
             self.respond_json({"success": False, "error": "Not found"}, status=404)
             return
         super().do_GET()
@@ -1314,6 +1592,28 @@ class Handler(SimpleHTTPRequestHandler):
                 result.pop("_session_expires", None)
                 extra = [("Set-Cookie", session_cookie_header(sid, remember=False))] if sid else None
                 self.respond_json(result, extra_headers=extra)
+                return
+            # ---- Lab endpoints (write-side) -----------------------------------
+            if parsed.path == "/api/diary":
+                self.respond_json(diary_write_endpoint(self.read_json()), status=201)
+                return
+            if parsed.path == "/api/tunnels":
+                self.respond_json(create_tunnel_endpoint(self.read_json()), status=201)
+                return
+            if parsed.path == "/api/tunnels/delete":
+                self.respond_json(delete_tunnel_endpoint(self.read_json()))
+                return
+            if parsed.path == "/api/check-duplicate":
+                self.respond_json(check_duplicate_endpoint(self.read_json()))
+                return
+            if parsed.path == "/api/hooks":
+                self.respond_json(hook_settings_set_endpoint(self.read_json()))
+                return
+            if parsed.path == "/api/sync":
+                self.respond_json(sync_endpoint(self.read_json()))
+                return
+            if parsed.path == "/api/reconnect":
+                self.respond_json(reconnect_endpoint(self.read_json()))
                 return
             self.respond_json({"success": False, "error": "Not found"}, status=404)
         except json.JSONDecodeError:
