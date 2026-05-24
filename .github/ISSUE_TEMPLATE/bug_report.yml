@@ -1,0 +1,88 @@
+name: Bug report
+description: Report something that doesn't work the way the docs or UI suggest it should.
+title: "[bug] "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug. The faster a maintainer can reproduce it, the faster it gets fixed.
+        Please redact anything sensitive (memory content, hostnames, file paths inside `$HOME`) before submitting.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: One or two sentences — what happened and what you expected instead.
+      placeholder: "Deleting a wing leaves the snapshot log empty even though Settings says snapshots are enabled."
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Start from a clean `python3 server.py` if possible.
+      value: |
+        1. Start the server with …
+        2. Open …
+        3. Click …
+        4. Observe …
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+      description: Include server-log excerpts and any browser-console errors. Redact sensitive paths.
+    validations:
+      required: true
+
+  - type: input
+    id: commit
+    attributes:
+      label: Commit SHA
+      description: Output of `git rev-parse HEAD` in your checkout.
+      placeholder: "a16bac8"
+    validations:
+      required: true
+
+  - type: input
+    id: python
+    attributes:
+      label: Python version
+      placeholder: "3.11.9"
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: "macOS 14.5 / Ubuntu 24.04 / Windows 11"
+    validations:
+      required: true
+
+  - type: input
+    id: mempalace
+    attributes:
+      label: MemPalace version
+      description: Output of `pip show mempalace | head -2` inside the venv `MEMPALACE_PYTHON_BIN` points at.
+    validations:
+      required: false
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: Workarounds you've tried, related issues, hunches about the cause.
+    validations:
+      required: false
