@@ -57,6 +57,7 @@
 - **Recently deleted** view with one-click restore (creates a fresh copy) and a "Delete all" purge.
 - **Drafts inbox** — save partial memories, edit them in place, and file them into the palace when ready.
 - **Knowledge graph** view of triples, with one-click "End" to invalidate stale facts, a form to add new ones, and a force-directed graph visualisation.
+- **Lab panel** — power-user sheet that surfaces every MemPalace MCP tool in six tabs: Knowledge Graph (entity query + timeline), Tunnels (list, create, delete, find, follow, graph-traverse), Diary (read / write agent diary entries), Stats (KG and palace stats, last-checkpoint), and Maintenance (taxonomy, duplicate check, hook settings, sync, reconnect, AAAK spec). See the [API reference](#api-reference) for the underlying endpoints.
 - **Wiki-style links** — `[[name]]` references in memory content become clickable jumps to the matching memory.
 - **URL state** — current wing / room / drawer / query / sort survive page reloads and are linkable.
 - **Keyboard shortcuts** — `⌘K`/`Ctrl+K` focuses search, `Esc` closes any open sheet, `R` reloads data.
@@ -169,6 +170,26 @@ All endpoints are JSON over HTTP. Auth is by session cookie (`mempalace_session`
 | `POST` | `/api/facts/invalidate` | auth | Mark a triple as ended. |
 | `GET`  | `/api/settings` | auth | Whether credentials are configured + username. |
 | `POST` | `/api/settings/credentials` | auth | Set or rotate the username + password. |
+| `GET`  | `/api/kg/query?entity=…&direction=…&as_of=…` | auth | Query KG facts about an entity. |
+| `GET`  | `/api/kg/timeline?entity=…` | auth | Chronological view of an entity's facts. |
+| `GET`  | `/api/kg/stats` | auth | Knowledge-graph aggregate stats. |
+| `GET`  | `/api/graph/stats` | auth | Palace graph stats. |
+| `GET`  | `/api/taxonomy` | auth | Current wing/room taxonomy tree. |
+| `GET`  | `/api/checkpoint` | auth | Memories-filed-away state (recent checkpoint). |
+| `GET`  | `/api/aaak-spec` | auth | AAAK spec reference. |
+| `GET`  | `/api/diary?agent_name=…&last_n=…&wing=…` | auth | Read agent diary entries (latest `last_n`, capped at 200). |
+| `POST` | `/api/diary` | auth | Write a diary entry (`{agent_name, entry, topic?, wing?}`). |
+| `GET`  | `/api/tunnels?wing=…` | auth | List tunnels (optionally filtered by wing). |
+| `POST` | `/api/tunnels` | auth | Create a tunnel (`{source_wing, source_room, target_wing, target_room, label?, source_drawer_id?, target_drawer_id?}`). |
+| `POST` | `/api/tunnels/delete` | auth | Delete a tunnel by ID. Snapshotted to the versions log before deletion. |
+| `GET`  | `/api/tunnels/find?wing_a=…&wing_b=…` | auth | Find tunnels between two wings. |
+| `GET`  | `/api/tunnels/follow?wing=…&room=…` | auth | List tunnels reachable from a room. |
+| `GET`  | `/api/traverse?start_room=…&max_hops=…` | auth | Graph-traverse from a starting room (`max_hops` capped at 5). |
+| `POST` | `/api/check-duplicate` | auth | Check whether content is a near-duplicate (`{content, threshold?}`). |
+| `GET`  | `/api/hooks` | auth | Current hook settings (silent-save, desktop-toast). |
+| `POST` | `/api/hooks` | auth | Update hook settings (`{silent_save?, desktop_toast?}`). |
+| `POST` | `/api/sync` | auth | Sync from a project tree (`{apply?, wing?, project_dir?}`). Slow — runs with a 5-minute timeout. |
+| `POST` | `/api/reconnect` | auth | Force-reconnect the MemPalace backend. |
 
 Example — file a memory from the command line:
 
