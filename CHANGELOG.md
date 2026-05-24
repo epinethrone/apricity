@@ -8,6 +8,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 _No unreleased changes._
 
+## [0.3.2] — 2026-05-24
+
+### Fixed
+- README hero logo — the image src was stale after the `static/ → mempalace_dashboard/static/` move in 0.3.0 and rendered as a broken image on GitHub and PyPI. Now uses an absolute `raw.githubusercontent.com` URL so it renders correctly on both.
+- `release.yml` PyPI publish step now passes `skip-existing: true`, so re-running the workflow on an already-published tag (e.g. after a tag force-push) no longer leaves the `pypi` deployment marked as failed.
+
 ## [0.3.1] — 2026-05-24
 
 ### Changed
@@ -63,7 +69,8 @@ _No unreleased changes._
 - URL state for current wing / room / drawer / query / sort.
 - Keyboard shortcuts (`⌘K`, `Esc`, `R`).
 
-[Unreleased]: https://github.com/epinethrone/mempalace-frontend/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/epinethrone/mempalace-frontend/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/epinethrone/mempalace-frontend/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/epinethrone/mempalace-frontend/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/epinethrone/mempalace-frontend/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/epinethrone/mempalace-frontend/compare/v0.1.1...v0.2.0

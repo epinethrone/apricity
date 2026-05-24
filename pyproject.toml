@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mempalace-dashboard"
-version = "0.3.1"
+version = "0.3.2"
 description = "A local, zero-dependency web UI for browsing, editing, and curating a MemPalace personal-memory store."
 readme = "README.md"
 requires-python = ">=3.11"

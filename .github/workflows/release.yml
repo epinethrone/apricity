@@ -80,3 +80,8 @@ jobs:
           name: dist
           path: dist
       - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # Re-running the workflow on an existing tag (e.g. after a
+          # force-push) shouldn't fail — PyPI rejects duplicate uploads,
+          # which would otherwise show up as a red deployment.
+          skip-existing: true
