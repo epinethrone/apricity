@@ -1,5 +1,7 @@
-// MemPalace Lab — wires the Lab sheet to every advanced MCP tool.
-// Depends on fetchJson / postJson defined in app.js.
+// MemPalace Tools — wires the Tools sheet to write/destructive ops and a
+// few advanced read queries. Read-style browsing (tunnel list, diary read)
+// moved into the main UI in 0.5.0 (chips on room rows; diary as a wing).
+// Depends on fetchJson / postJson / loadTunnels defined in app.js.
 (function () {
   "use strict";
 
@@ -29,23 +31,6 @@
   const tabs = sheet.querySelectorAll(".lab-tab");
   const panes = sheet.querySelectorAll(".lab-pane");
 
-  // Pane-init hooks: keyed by data-lab-tab. Called the FIRST time a tab is
-  // shown so e.g. Tunnels auto-loads its list without an extra click. Each
-  // hook fires exactly once per page load.
-  const paneInit = {
-    tunnels: () => {
-      const btn = $("#tunListRun");
-      if (btn) btn.click();
-    },
-  };
-  const paneInitFired = new Set();
-  function fireTabInit(target) {
-    if (paneInitFired.has(target)) return;
-    paneInitFired.add(target);
-    const hook = paneInit[target];
-    if (typeof hook === "function") hook();
-  }
-
   tabs.forEach((tab) => {
     tab.addEventListener("click", () => {
       const target = tab.dataset.labTab;
@@ -60,7 +45,6 @@
         if (show) p.removeAttribute("hidden");
         else p.setAttribute("hidden", "");
       });
-      fireTabInit(target);
     });
   });
 
@@ -153,90 +137,11 @@
     el.innerHTML = `<div class="lab-summary">${events.length} event(s)</div>${rows}`;
   }
 
-  // Extract a {wing, room} pair from a tunnel endpoint that may be either
-  // nested ({source: {wing, room}}) or flat (legacy source_wing/source_room
-  // or from_wing/from_room). MCP tool_list_tunnels returns the nested shape;
-  // tool_find_tunnels / tool_follow_tunnels return similar nested objects.
-  function tunnelEndpoint(t, side) {
-    const nested = t && t[side];
-    if (nested && typeof nested === "object") {
-      return { wing: nested.wing || "?", room: nested.room || "?" };
-    }
-    if (side === "source") {
-      return { wing: t.source_wing || t.from_wing || "?", room: t.source_room || t.from_room || "?" };
-    }
-    return { wing: t.target_wing || t.to_wing || "?", room: t.target_room || t.to_room || "?" };
-  }
-
-  // Jump to a wing/room in the main UI and close Lab. Works by clicking the
-  // existing nav buttons, so we inherit whatever selection logic app.js uses.
-  //
-  // Tries name variants because tunnel-storage and drawer-storage normalize
-  // wing names differently (tunnels: "home_assistant", drawers: "home-assistant").
-  // Tracked upstream as MemPalace/mempalace#1621.
-  function findNavButton(selector, name) {
-    if (!name || name === "?") return null;
-    const variants = [name, name.replace(/_/g, "-"), name.replace(/-/g, "_")];
-    for (const variant of variants) {
-      const btn = document.querySelector(`${selector}[data-${selector.includes("wing") ? "wing" : "room"}="${CSS.escape(variant)}"]`);
-      if (btn) return btn;
-    }
-    return null;
-  }
-
-  function navigateToRoom(wing, room) {
-    const wingBtn = findNavButton("#wingNav .nav-item", wing);
-    if (!wingBtn) return false;
-    wingBtn.click();
-    if (room && room !== "?") {
-      // app.js renders roomNav synchronously after a wing click.
-      const roomBtn = findNavButton("#roomNav .room-item", room);
-      if (roomBtn) roomBtn.click();
-    }
-    closeLab();
-    return true;
-  }
-
-  function renderTunnels(target, data) {
-    const el = $(target);
-    if (!el) return;
-    const tunnels = (data && (data.tunnels || data.connections || data.results || data.items)) || [];
-    if (!tunnels.length) { renderEmpty(target, "No tunnels yet."); return; }
-    const rows = tunnels.map((t, idx) => {
-      const id = t.tunnel_id || t.id || "";
-      const s = tunnelEndpoint(t, "source");
-      const d = tunnelEndpoint(t, "target");
-      const src = `${escapeHtml(s.wing)}/${escapeHtml(s.room)}`;
-      const dst = `${escapeHtml(d.wing)}/${escapeHtml(d.room)}`;
-      const label = t.label ? `<div class="lab-tunnel-label">${escapeHtml(t.label)}</div>` : "";
-      const delBtn = id ? `<button class="icon-button danger-button lab-tunnel-del" data-tunnel-id="${escapeHtml(id)}" type="button">Delete</button>` : "";
-      const srcAttr = `data-jump-wing="${escapeHtml(s.wing)}" data-jump-room="${escapeHtml(s.room)}"`;
-      const dstAttr = `data-jump-wing="${escapeHtml(d.wing)}" data-jump-room="${escapeHtml(d.room)}"`;
-      return `<div class="lab-tunnel" data-tunnel-idx="${idx}">`
-        + `<div class="lab-tunnel-route">`
-        +   `<button class="lab-tunnel-jump" type="button" ${srcAttr} title="Open ${src}">${src}</button>`
-        +   `<span class="lab-arrow">→</span>`
-        +   `<button class="lab-tunnel-jump" type="button" ${dstAttr} title="Open ${dst}">${dst}</button>`
-        + `</div>`
-        + `${label}`
-        + `<div class="lab-tunnel-meta"><code>${escapeHtml(id)}</code>${delBtn}</div>`
-        + `</div>`;
-    }).join("");
-    el.innerHTML = `<div class="lab-summary">${tunnels.length} tunnel(s)</div>${rows}`;
-    el.querySelectorAll(".lab-tunnel-jump").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        navigateToRoom(btn.dataset.jumpWing, btn.dataset.jumpRoom);
-      });
-    });
-    el.querySelectorAll(".lab-tunnel-del").forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        if (!confirm(`Delete tunnel ${btn.dataset.tunnelId}?`)) return;
-        try {
-          await postJson("/api/tunnels/delete", { tunnel_id: btn.dataset.tunnelId });
-          btn.closest(".lab-tunnel").remove();
-        } catch (err) { alert(err.message || err); }
-      });
-    });
+  // Tell app.js to re-fetch tunnels and re-render chips on room rows. Done
+  // via a window function call (loadTunnels is exposed by app.js) so the
+  // two scripts stay loosely coupled.
+  function notifyTunnelsChanged() {
+    if (typeof window.loadTunnels === "function") window.loadTunnels();
   }
 
   function renderTaxonomy(target, data) {
@@ -256,21 +161,6 @@
       return `<details class="lab-tax-wing" open><summary><strong>${escapeHtml(wing)}</strong> <span class="lab-pill">${total}</span></summary><ul>${items}</ul></details>`;
     }).join("");
     el.innerHTML = html;
-  }
-
-  function renderDiary(target, data) {
-    const el = $(target);
-    if (!el) return;
-    const entries = (data && (data.entries || data.diary || data.drawers || data.items)) || [];
-    if (!Array.isArray(entries) || !entries.length) { renderJson(target, data); return; }
-    const rows = entries.map((e) => {
-      const when = e.filed_at || e.created_at || e.timestamp || "";
-      const topic = e.topic || e.room || "";
-      const wing = e.wing || "";
-      const body = e.content || e.entry || e.text || JSON.stringify(e);
-      return `<div class="lab-diary"><div class="lab-diary-head"><span>${escapeHtml(when)}</span><span class="lab-pill">${escapeHtml(wing)}/${escapeHtml(topic)}</span></div><pre class="lab-diary-body">${escapeHtml(body)}</pre></div>`;
-    }).join("");
-    el.innerHTML = `<div class="lab-summary">${entries.length} entry(ies)</div>${rows}`;
   }
 
   function renderAaak(target, data) {
@@ -312,13 +202,11 @@
   });
 
   // ---------- Tunnels tab ----------
-  $("#tunListRun").addEventListener("click", () => {
-    run("#tunListOutput", "Listing…",
-      () => fetchJson(`/api/tunnels${qs({ wing: v("#tunListWing") })}`),
-      renderTunnels);
-  });
+  // Browse / Find / Follow panes were removed in 0.5.0 — chips on each room
+  // nav row now show the same connections inline. Only the write path
+  // (create) and the advanced multi-hop traverse query remain here.
 
-  $("#tunCreateRun").addEventListener("click", () => {
+  $("#tunCreateRun").addEventListener("click", async () => {
     const payload = {
       source_wing: v("#tunCreateSourceWing"),
       source_room: v("#tunCreateSourceRoom"),
@@ -328,17 +216,12 @@
       source_drawer_id: v("#tunCreateSourceDrawer"),
       target_drawer_id: v("#tunCreateTargetDrawer"),
     };
-    run("#tunCreateOutput", "Creating…", () => postJson("/api/tunnels", payload));
-  });
-
-  $("#tunFindRun").addEventListener("click", () => {
-    run("#tunFindOutput", "Searching…",
-      () => fetchJson(`/api/tunnels/find${qs({ wing_a: v("#tunFindA"), wing_b: v("#tunFindB") })}`));
-  });
-
-  $("#tunFollowRun").addEventListener("click", () => {
-    run("#tunFollowOutput", "Following…",
-      () => fetchJson(`/api/tunnels/follow${qs({ wing: v("#tunFollowWing"), room: v("#tunFollowRoom") })}`));
+    renderLoading("#tunCreateOutput", "Creating…");
+    try {
+      const result = await postJson("/api/tunnels", payload);
+      renderJson("#tunCreateOutput", result);
+      notifyTunnelsChanged();
+    } catch (err) { renderError("#tunCreateOutput", err); }
   });
 
   $("#tunTravRun").addEventListener("click", () => {
@@ -347,15 +230,8 @@
   });
 
   // ---------- Diary tab ----------
-  $("#diaryReadRun").addEventListener("click", () => {
-    const params = {
-      agent_name: v("#diaryReadAgent"),
-      last_n: v("#diaryReadN") || "10",
-      wing: v("#diaryReadWing"),
-    };
-    if (!params.agent_name) { renderError("#diaryReadOutput", "agent_name is required."); return; }
-    run("#diaryReadOutput", "Reading…", () => fetchJson(`/api/diary${qs(params)}`), renderDiary);
-  });
+  // Read pane was removed in 0.5.0 — diary is now browsable as a regular
+  // wing (wing_{agent}) from the sidebar. Only the write op remains here.
 
   $("#diaryWriteRun").addEventListener("click", () => {
     const payload = {

@@ -17,6 +17,13 @@ const state = {
   applyingHash: false,
   factEditing: null,
   editingDraft: null,
+  // Tunnels: loaded lazily in parallel to the palace. Renderers read from
+  // tunnelsByRoomKey (key = `wing|room`) to decorate room nav items.
+  tunnels: [],
+  tunnelsByRoomKey: new Map(),
+  tunnelsByWing: new Map(),
+  tunnelsLoaded: false,
+  expandedTunnelRooms: new Set(),
 };
 
 const AUTH_STORAGE_KEY = "mempalace-auth-token";
@@ -421,7 +428,129 @@ async function loadPalace() {
   await refreshDraftsCount().catch(() => {});
   render();
   loadSystemInfo().catch(() => {});
+  loadTunnels().catch(() => {});
 }
+
+// ---------- tunnel cache ----------
+// Tunnels are cross-wing typed links between rooms. Stored under one wing-
+// name normalization in tunnel-land (e.g. "home_assistant") and under
+// another in drawer-land ("home-assistant"). We normalize to the drawer
+// form ("home-assistant") because that's the canonical form the rest of
+// the UI uses. Tracked upstream as MemPalace/mempalace#1621.
+function tunnelWingForm(name) {
+  // Tunnel storage replaces "-" with "_" inside wing names. Reverse it so
+  // chips and lookups all live in drawer-name space ("home-assistant").
+  return (name || "").replace(/_/g, "-");
+}
+function tunnelRoomKey(wing, room) {
+  return `${tunnelWingForm(wing)}|${room || ""}`;
+}
+
+async function loadTunnels() {
+  let raw;
+  try {
+    raw = await fetchJson("/api/tunnels");
+  } catch (err) {
+    // Auth not yet established, or endpoint unavailable. The UI is fine
+    // without chips; we just don't render them.
+    state.tunnelsLoaded = false;
+    return;
+  }
+  const items = (raw && (raw.tunnels || raw.items || raw.results)) || [];
+  state.tunnels = items;
+  state.tunnelsByRoomKey = new Map();
+  state.tunnelsByWing = new Map();
+  for (const t of items) {
+    const s = t.source || {};
+    const d = t.target || {};
+    const sWing = tunnelWingForm(s.wing);
+    const dWing = tunnelWingForm(d.wing);
+    const sKey = tunnelRoomKey(s.wing, s.room);
+    const dKey = tunnelRoomKey(d.wing, d.room);
+    pushMapList(state.tunnelsByRoomKey, sKey, { side: "outgoing", other: { wing: dWing, room: d.room }, tunnel: t });
+    pushMapList(state.tunnelsByRoomKey, dKey, { side: "incoming", other: { wing: sWing, room: s.room }, tunnel: t });
+    pushMapList(state.tunnelsByWing, sWing, t);
+    if (sWing !== dWing) pushMapList(state.tunnelsByWing, dWing, t);
+  }
+  state.tunnelsLoaded = true;
+  // Re-render so chips appear once tunnels arrive.
+  if (state.palace) render();
+}
+
+function pushMapList(map, key, value) {
+  const arr = map.get(key);
+  if (arr) arr.push(value);
+  else map.set(key, [value]);
+}
+
+function tunnelsForRoom(wing, room) {
+  return state.tunnelsByRoomKey.get(tunnelRoomKey(wing, room)) || [];
+}
+
+function tunnelsForRoomAcrossWings(room) {
+  // Used in "All Memory" view where wing context is ambiguous.
+  const all = [];
+  for (const [key, list] of state.tunnelsByRoomKey) {
+    if (key.endsWith(`|${room}`)) all.push(...list);
+  }
+  return all;
+}
+
+function navigateToRoom(wing, room) {
+  // Try wing as-is, then with underscore→hyphen swap (drawer-form).
+  if (!state.palace) return false;
+  const variants = [wing, (wing || "").replace(/_/g, "-"), (wing || "").replace(/-/g, "_")];
+  let resolvedWing = null;
+  for (const v of variants) {
+    if (state.palace.wings.some((w) => w.name === v)) { resolvedWing = v; break; }
+  }
+  if (!resolvedWing) return false;
+  state.selectedWing = resolvedWing;
+  state.selectedRoom = room || "all";
+  state.selectedDrawerId = null;
+  render();
+  return true;
+}
+
+// Opens the Lab modal on the Tunnels tab, expands the Create section, and
+// prefills the source endpoint. Used by inline "Connect this room…"
+// affordances on room nav rows so users don't have to retype context. Lives
+// on window so lab.js can also dispatch a refresh after a successful create
+// (see the tunnels-changed event listener below).
+function openTunnelCreate(wing, room) {
+  const labBtn = document.querySelector("#labBtn");
+  if (!labBtn) return;
+  labBtn.click(); // open the lab sheet
+  const tab = document.querySelector('.lab-tab[data-lab-tab="tunnels"]');
+  if (tab) tab.click();
+  // Expand the Create details panel inside the tunnels pane.
+  const createBlock = document.querySelector('.lab-pane[data-lab-pane="tunnels"] details:nth-of-type(2)');
+  if (createBlock) createBlock.open = true;
+  const setVal = (id, val) => {
+    const el = document.querySelector(id);
+    if (el && val !== undefined && val !== null) el.value = val;
+  };
+  setVal("#tunCreateSourceWing", wing || "");
+  setVal("#tunCreateSourceRoom", room || "");
+  setVal("#tunCreateTargetWing", "");
+  setVal("#tunCreateTargetRoom", "");
+  setVal("#tunCreateLabel", "");
+  const focusEl = document.querySelector("#tunCreateTargetWing");
+  if (focusEl) {
+    focusEl.focus();
+    // Smooth-scroll the create block into view inside the lab body.
+    requestAnimationFrame(() => {
+      const block = focusEl.closest("details");
+      if (block && typeof block.scrollIntoView === "function") {
+        block.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    });
+  }
+}
+// Expose so lab.js (which is its own IIFE) can re-trigger our tunnel
+// loader after a create/delete.
+window.loadTunnels = (...args) => loadTunnels(...args);
+window.openTunnelCreate = openTunnelCreate;
 
 function formatBytes(bytes) {
   if (!bytes) return "0 B";
@@ -645,10 +774,16 @@ function renderNav() {
             ${deleteIconButton({ scope: "wing", wing: wing.name })}
           </div>`
         : "";
+      const wingTunnels = (!editing && wing.name !== "all")
+        ? (state.tunnelsByWing.get(wing.name) || []).length
+        : 0;
+      const wingChip = wingTunnels > 0
+        ? `<span class="wing-tunnel-chip" title="${wingTunnels} cross-wing tunnel${wingTunnels === 1 ? "" : "s"}" aria-label="${wingTunnels} tunnels">${wingTunnels}</span>`
+        : "";
       return `<div class="nav-row ${active}" data-wing-row="${escapeHtml(wing.name)}">
         <button class="nav-item" type="button" data-wing="${escapeHtml(wing.name)}" ${editing && wing.name !== "all" ? "disabled" : ""}>
           <span>${escapeHtml(label)}</span>
-          <strong>${wing.count}</strong>
+          <span class="nav-item-meta">${wingChip}<strong>${wing.count}</strong></span>
         </button>
         ${actions}
       </div>`;
@@ -686,12 +821,24 @@ function renderRooms(drawers) {
   const canEdit = state.selectedWing !== "all" && rooms.length > 0;
   if (!canEdit && state.editingRooms) state.editingRooms = false;
   const editing = state.editingRooms;
+  const showConnect = !editing && state.selectedWing !== "all" && state.selectedRoom !== "all";
+  const connectBtn = showConnect
+    ? `<button class="nav-toolbar-action" id="connectRoomBtn" type="button"
+        title="Connect ${escapeHtml(state.selectedRoom)} to another room">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M7 17c4.5 0 5.5-10 10-10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+          <path d="M14 7h3v3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        Connect this room…
+      </button>`
+    : "";
   const toggle = canEdit
     ? `<div class="nav-toolbar room-toolbar">
         <span class="nav-toolbar-label">${editing ? "Editing rooms" : ""}</span>
+        ${connectBtn}
         ${editToggleButton({ id: "roomEditToggle", label: editing ? "Done" : "Edit rooms", active: editing })}
       </div>`
-    : "";
+    : (showConnect ? `<div class="nav-toolbar room-toolbar">${connectBtn}</div>` : "");
   els.roomNav.classList.toggle("editing", editing);
   els.roomNav.innerHTML =
     toggle +
@@ -718,12 +865,60 @@ function renderRooms(drawers) {
               ${deleteIconButton({ scope: "room", wing: state.selectedWing, room })}
             </div>`
           : "";
-        return `<div class="room-row ${active}">
+        // Tunnel decoration. In "all wings" view we sum across wings;
+        // otherwise we scope to the current wing.
+        const tunnelEntries = state.selectedWing === "all"
+          ? tunnelsForRoomAcrossWings(room)
+          : tunnelsForRoom(state.selectedWing, room);
+        const tunnelKey = `${state.selectedWing} ${room}`;
+        const expanded = state.expandedTunnelRooms.has(tunnelKey);
+        const chip = (!editing && tunnelEntries.length > 0)
+          ? `<button class="room-tunnel-chip ${expanded ? "open" : ""}" type="button"
+              data-tunnel-toggle="${escapeHtml(tunnelKey)}"
+              aria-expanded="${expanded ? "true" : "false"}"
+              aria-label="${tunnelEntries.length} connected ${tunnelEntries.length === 1 ? "room" : "rooms"}"
+              title="${tunnelEntries.length} connected ${tunnelEntries.length === 1 ? "room" : "rooms"}">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M7 17c4.5 0 5.5-10 10-10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                <path d="M14 7h3v3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+              <span>${tunnelEntries.length}</span>
+            </button>`
+          : "";
+        const expansion = (expanded && tunnelEntries.length > 0)
+          ? `<div class="room-tunnel-list">
+              ${tunnelEntries.map((entry) => {
+                const dir = entry.side === "outgoing" ? "→" : "←";
+                const other = entry.other;
+                const label = entry.tunnel.label
+                  ? `<span class="room-tunnel-link-label" title="${escapeHtml(entry.tunnel.label)}">${escapeHtml(entry.tunnel.label)}</span>`
+                  : "";
+                return `<button class="room-tunnel-link" type="button"
+                    data-jump-wing="${escapeHtml(other.wing)}"
+                    data-jump-room="${escapeHtml(other.room)}"
+                    title="Open ${escapeHtml(other.wing)}/${escapeHtml(other.room)}">
+                    <span class="room-tunnel-link-arrow">${dir}</span>
+                    <span class="room-tunnel-link-name">${escapeHtml(other.wing)} / <strong>${escapeHtml(other.room)}</strong></span>
+                    ${label}
+                  </button>`;
+              }).join("")}
+              ${(state.selectedWing !== "all") ? `
+                <button class="room-tunnel-add" type="button"
+                  data-tunnel-create-wing="${escapeHtml(state.selectedWing)}"
+                  data-tunnel-create-room="${escapeHtml(room)}"
+                  title="Add another connection from ${escapeHtml(room)}">
+                  + Connect to another room
+                </button>` : ""}
+            </div>`
+          : "";
+        return `<div class="room-row ${active} ${expanded ? "tunnel-open" : ""}">
           <button class="room-item" type="button" data-room="${escapeHtml(room)}" ${editing ? "disabled" : ""}>
             <span>${escapeHtml(humanizeName(room))}</span>
             <strong>${count}</strong>
           </button>
+          ${chip}
           ${actions}
+          ${expansion}
         </div>`;
       }),
     ].join("");
@@ -743,6 +938,33 @@ function renderRooms(drawers) {
       render();
     });
   });
+  els.roomNav.querySelectorAll("[data-tunnel-toggle]").forEach((button) => {
+    button.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const key = button.dataset.tunnelToggle;
+      if (state.expandedTunnelRooms.has(key)) state.expandedTunnelRooms.delete(key);
+      else state.expandedTunnelRooms.add(key);
+      render();
+    });
+  });
+  els.roomNav.querySelectorAll(".room-tunnel-link").forEach((button) => {
+    button.addEventListener("click", (e) => {
+      e.stopPropagation();
+      navigateToRoom(button.dataset.jumpWing, button.dataset.jumpRoom);
+    });
+  });
+  els.roomNav.querySelectorAll(".room-tunnel-add").forEach((button) => {
+    button.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openTunnelCreate(button.dataset.tunnelCreateWing, button.dataset.tunnelCreateRoom);
+    });
+  });
+  const connectHeaderBtn = document.querySelector("#connectRoomBtn");
+  if (connectHeaderBtn) {
+    connectHeaderBtn.addEventListener("click", () => {
+      openTunnelCreate(state.selectedWing, state.selectedRoom);
+    });
+  }
 }
 
 function formatDate(iso) {

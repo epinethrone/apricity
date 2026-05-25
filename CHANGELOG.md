@@ -8,6 +8,25 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 _No unreleased changes._
 
+## [0.5.0] — 2026-05-26
+
+### Added
+- **Tunnels are now first-class on every room.** Each room nav row gets a small connection chip (`⤵ N`) when it has any tunnels. Click the chip and the row expands inline to show the connected rooms — each is a button that navigates straight to that wing+room. No more digging into a modal to see what a room links to.
+- **Wing-level tunnel counts.** Sidebar wing rows also pick up a small accent chip showing how many cross-wing tunnels involve that wing, so you can see at a glance which wings are well-connected.
+- **"+ Connect this room…" inline create.** Two affordances: a pill button in the rooms-panel toolbar (visible whenever a specific room is selected) and a dashed footer button at the end of every chip expansion. Both prefill the source endpoint in the Tools tunnel-create form so you only have to pick a target.
+
+### Changed
+- **Lab → Tools.** The top-bar entry, sheet title, and aria-labels all renamed to "Tools" — better reflects what's left after the read panes moved inline. Subtitle now explains where browsing went.
+- **Tunnels pane in Tools.** Browse / Find tunnels between wings / Follow tunnels from a room panes were removed (chips replace them inline). Only **Create tunnel** (open by default) and the advanced **Traverse graph** query remain.
+- **Diary pane in Tools.** Read pane was removed — diary now lives as a regular wing (`wing_{agent}`) browsable from the sidebar like any other wing. Only **Write diary entry** remains.
+- **Knowledge Graph and Timeline panes flagged transitional.** They keep working, but their content is slated to surface inline on entity drawers in 0.5.1 once the entity-matching design is settled.
+
+### Fixed
+- The "needs a click to load" friction on the Tunnels Browse pane is fully gone (because the pane is gone — the chips are always on).
+
+### Notes for 0.5.1
+- Inline KG facts on drawer detail view. Needs a design pass on how to compute "entities mentioned in this drawer" — either an `/api/kg/entities` listing endpoint with client-side substring matching, or explicit drawer-entity tagging in the MemPalace schema.
+
 ## [0.4.2] — 2026-05-26
 
 ### Fixed
@@ -114,7 +133,8 @@ _No unreleased changes._
 - URL state for current wing / room / drawer / query / sort.
 - Keyboard shortcuts (`⌘K`, `Esc`, `R`).
 
-[Unreleased]: https://github.com/epinethrone/mempalace-frontend/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/epinethrone/mempalace-frontend/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/epinethrone/mempalace-frontend/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/epinethrone/mempalace-frontend/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/epinethrone/mempalace-frontend/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/epinethrone/mempalace-frontend/compare/v0.3.3...v0.4.0
