@@ -8,6 +8,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 _No unreleased changes._
 
+## [0.5.1] — 2026-05-26
+
+### Fixed
+- **Stack overflow on initial load (`Maximum call stack size exceeded`).** 0.5.0 added two lines at the end of the new tunnel-loader block:
+  ```js
+  window.loadTunnels = (...args) => loadTunnels(...args);
+  window.openTunnelCreate = openTunnelCreate;
+  ```
+  intended to "expose" the functions to `lab.js`. The first one was a self-referencing arrow because function declarations in classic scripts auto-attach to the global object — assigning to `window.loadTunnels` rebound the same global property the bare `loadTunnels` inside the arrow body resolved to. Every call recursed until the stack blew. Triggered immediately on page load because `loadPalace()` fires `loadTunnels().catch(...)` once palace data arrives. The wrappers are gone; the underlying functions are already on `window` from their declarations.
+
 ## [0.5.0] — 2026-05-26
 
 ### Added
@@ -133,7 +143,8 @@ _No unreleased changes._
 - URL state for current wing / room / drawer / query / sort.
 - Keyboard shortcuts (`⌘K`, `Esc`, `R`).
 
-[Unreleased]: https://github.com/epinethrone/mempalace-frontend/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/epinethrone/mempalace-frontend/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/epinethrone/mempalace-frontend/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/epinethrone/mempalace-frontend/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/epinethrone/mempalace-frontend/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/epinethrone/mempalace-frontend/compare/v0.4.0...v0.4.1
