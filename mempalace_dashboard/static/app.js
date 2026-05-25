@@ -547,10 +547,16 @@ function openTunnelCreate(wing, room) {
     });
   }
 }
-// Expose so lab.js (which is its own IIFE) can re-trigger our tunnel
-// loader after a create/delete.
-window.loadTunnels = (...args) => loadTunnels(...args);
-window.openTunnelCreate = openTunnelCreate;
+// Both functions are already on window — top-level `function` declarations
+// in a classic script auto-attach to the global object, so lab.js can call
+// `window.loadTunnels(...)` and `window.openTunnelCreate(...)` directly.
+//
+// The previous version of this file wrapped them in arrows like:
+//   window.loadTunnels = (...args) => loadTunnels(...args);
+// which exploded the stack on initial load. The arrow rebound
+// window.loadTunnels, so the bare `loadTunnels` inside the arrow then
+// resolved back to the arrow itself (function declarations create global
+// properties that ARE writable). Every call recursed. Don't re-add wrappers.
 
 function formatBytes(bytes) {
   if (!bytes) return "0 B";
