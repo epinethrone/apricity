@@ -37,7 +37,7 @@
     />
     <meta name="twitter:image" content="/mempalace-logo.png" />
 
-    <link rel="stylesheet" href="/styles.css?v=49" />
+    <link rel="stylesheet" href="/styles.css?v=50" />
   </head>
   <body>
     <div class="shell">
@@ -88,7 +88,7 @@
           </div>
           <div class="top-actions">
             <button class="icon-button toolbar-button" id="draftsBtn" type="button" aria-label="View drafts" title="Drafts">Drafts<span class="badge hidden" id="draftsBadge">0</span></button>
-            <button class="icon-button toolbar-button" id="labBtn" type="button" aria-label="Open Lab" title="MemPalace Lab">Lab</button>
+            <button class="icon-button toolbar-button" id="labBtn" type="button" aria-label="Open Tools" title="MemPalace Tools — ops, writes, advanced queries">Tools</button>
             <button class="icon-button toolbar-button icon-only" id="trashBtn" type="button" aria-label="View trash" title="Recently deleted">
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M5 7h14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" fill="none"/>
@@ -482,17 +482,17 @@
       </form>
     </section>
 
-    <section class="write-sheet hidden" id="labSheet" aria-label="MemPalace Lab">
+    <section class="write-sheet hidden" id="labSheet" aria-label="MemPalace Tools">
       <div class="write-backdrop" id="labBackdrop"></div>
       <div class="write-panel lab-panel">
         <div class="write-header">
           <div>
-            <h2>Lab</h2>
-            <p>Knowledge graph, tunnels, diary, and maintenance — every MemPalace tool, one panel.</p>
+            <h2>Tools</h2>
+            <p>Writes, destructive ops, and advanced queries. Browsing has moved inline — rooms now show their tunnels as chips and the diary lives as its own wing.</p>
           </div>
           <button class="icon-button" id="labClose" type="button">Close</button>
         </div>
-        <div class="lab-tabs" role="tablist" aria-label="Lab sections">
+        <div class="lab-tabs" role="tablist" aria-label="Tools sections">
           <button class="lab-tab active" type="button" data-lab-tab="kg" role="tab" aria-selected="true">Knowledge Graph</button>
           <button class="lab-tab" type="button" data-lab-tab="timeline" role="tab" aria-selected="false">Timeline</button>
           <button class="lab-tab" type="button" data-lab-tab="tunnels" role="tab" aria-selected="false">Tunnels</button>
@@ -504,7 +504,7 @@
         <div class="lab-body">
           <section class="lab-pane active" data-lab-pane="kg">
             <h3>Query an entity</h3>
-            <p class="lab-hint">See all facts touching an entity. Optionally pin a date or filter direction.</p>
+            <p class="lab-hint">See all facts touching an entity. Optionally pin a date or filter direction. <span class="lab-transitional">Transitional — KG facts will surface inline on drawer details in 0.5.1.</span></p>
             <div class="lab-grid">
               <label><span>Entity</span><input id="kgEntity" placeholder="e.g. Coco, MyProject, Alice" autocomplete="off" /></label>
               <label>
@@ -525,7 +525,7 @@
 
           <section class="lab-pane" data-lab-pane="timeline" hidden>
             <h3>Fact timeline</h3>
-            <p class="lab-hint">Chronological story of an entity, or every fact ever filed if you leave it blank.</p>
+            <p class="lab-hint">Chronological story of an entity, or every fact ever filed if you leave it blank. <span class="lab-transitional">Transitional — will become a "See timeline" button on entity drawers in 0.5.1.</span></p>
             <div class="lab-grid">
               <label><span>Entity (optional)</span><input id="tlEntity" placeholder="leave blank for everything" autocomplete="off" /></label>
             </div>
@@ -537,21 +537,11 @@
 
           <section class="lab-pane" data-lab-pane="tunnels" hidden>
             <h3>Tunnels</h3>
-            <p class="lab-hint">Cross-wing typed links between rooms — the explicit hallways of the palace.</p>
+            <p class="lab-hint">Browsing tunnels is now inline — every room nav row shows a chip with its connected rooms. Use this pane to <strong>create</strong> a new tunnel by hand or run an advanced multi-hop graph traversal.</p>
 
             <details class="lab-block" open>
-              <summary>Browse</summary>
-              <div class="lab-grid">
-                <label><span>Filter by wing (optional)</span><input id="tunListWing" placeholder="leave blank for all" autocomplete="off" /></label>
-              </div>
-              <div class="lab-actions">
-                <button class="primary-action" type="button" id="tunListRun">List tunnels</button>
-              </div>
-              <div class="lab-output" id="tunListOutput"></div>
-            </details>
-
-            <details class="lab-block">
               <summary>Create tunnel</summary>
+              <p class="lab-hint">Most of the time you don't need this pane — click "+ Connect this room…" on any room nav row and the source is prefilled for you.</p>
               <div class="lab-grid">
                 <label><span>Source wing</span><input id="tunCreateSourceWing" autocomplete="off" /></label>
                 <label><span>Source room</span><input id="tunCreateSourceRoom" autocomplete="off" /></label>
@@ -570,31 +560,8 @@
             </details>
 
             <details class="lab-block">
-              <summary>Find tunnels between wings</summary>
-              <div class="lab-grid">
-                <label><span>Wing A (optional)</span><input id="tunFindA" autocomplete="off" /></label>
-                <label><span>Wing B (optional)</span><input id="tunFindB" autocomplete="off" /></label>
-              </div>
-              <div class="lab-actions">
-                <button class="primary-action" type="button" id="tunFindRun">Find</button>
-              </div>
-              <div class="lab-output" id="tunFindOutput"></div>
-            </details>
-
-            <details class="lab-block">
-              <summary>Follow tunnels from a room</summary>
-              <div class="lab-grid">
-                <label><span>Wing</span><input id="tunFollowWing" autocomplete="off" /></label>
-                <label><span>Room</span><input id="tunFollowRoom" autocomplete="off" /></label>
-              </div>
-              <div class="lab-actions">
-                <button class="primary-action" type="button" id="tunFollowRun">Follow</button>
-              </div>
-              <div class="lab-output" id="tunFollowOutput"></div>
-            </details>
-
-            <details class="lab-block">
-              <summary>Traverse graph</summary>
+              <summary>Traverse graph (advanced)</summary>
+              <p class="lab-hint">Walk the tunnel graph N hops from a starting room. Useful for discovering indirect connections that don't fit in the inline chip view.</p>
               <div class="lab-grid">
                 <label><span>Start room</span><input id="tunTravRoom" autocomplete="off" /></label>
                 <label><span>Max hops</span><input id="tunTravHops" type="number" min="1" max="5" value="2" /></label>
@@ -608,22 +575,9 @@
 
           <section class="lab-pane" data-lab-pane="diary" hidden>
             <h3>Diary</h3>
-            <p class="lab-hint">Per-agent compressed (AAAK) journal across sessions.</p>
+            <p class="lab-hint">Write a new entry. <strong>Reading</strong> the diary now lives in the main UI — it's stored as a regular wing (<code>wing_{agent}</code>), so browse it from the sidebar like any other wing.</p>
 
             <details class="lab-block" open>
-              <summary>Read diary</summary>
-              <div class="lab-grid">
-                <label><span>Agent name</span><input id="diaryReadAgent" placeholder="e.g. claude" autocomplete="off" /></label>
-                <label><span>Last N entries</span><input id="diaryReadN" type="number" min="1" max="200" value="10" /></label>
-                <label><span>Wing (optional)</span><input id="diaryReadWing" placeholder="defaults to wing_{agent}" autocomplete="off" /></label>
-              </div>
-              <div class="lab-actions">
-                <button class="primary-action" type="button" id="diaryReadRun">Read</button>
-              </div>
-              <div class="lab-output" id="diaryReadOutput"></div>
-            </details>
-
-            <details class="lab-block">
               <summary>Write diary entry</summary>
               <div class="lab-grid">
                 <label><span>Agent name</span><input id="diaryWriteAgent" autocomplete="off" /></label>
@@ -723,7 +677,7 @@
     </section>
 
 
-    <script src="/app.js?v=48"></script>
-    <script src="/lab.js?v=2"></script>
+    <script src="/app.js?v=50"></script>
+    <script src="/lab.js?v=3"></script>
   </body>
 </html>
