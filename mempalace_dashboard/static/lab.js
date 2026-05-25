@@ -28,6 +28,24 @@
   // ---------- tabs ----------
   const tabs = sheet.querySelectorAll(".lab-tab");
   const panes = sheet.querySelectorAll(".lab-pane");
+
+  // Pane-init hooks: keyed by data-lab-tab. Called the FIRST time a tab is
+  // shown so e.g. Tunnels auto-loads its list without an extra click. Each
+  // hook fires exactly once per page load.
+  const paneInit = {
+    tunnels: () => {
+      const btn = $("#tunListRun");
+      if (btn) btn.click();
+    },
+  };
+  const paneInitFired = new Set();
+  function fireTabInit(target) {
+    if (paneInitFired.has(target)) return;
+    paneInitFired.add(target);
+    const hook = paneInit[target];
+    if (typeof hook === "function") hook();
+  }
+
   tabs.forEach((tab) => {
     tab.addEventListener("click", () => {
       const target = tab.dataset.labTab;
@@ -42,6 +60,7 @@
         if (show) p.removeAttribute("hidden");
         else p.setAttribute("hidden", "");
       });
+      fireTabInit(target);
     });
   });
 
@@ -134,20 +153,81 @@
     el.innerHTML = `<div class="lab-summary">${events.length} event(s)</div>${rows}`;
   }
 
+  // Extract a {wing, room} pair from a tunnel endpoint that may be either
+  // nested ({source: {wing, room}}) or flat (legacy source_wing/source_room
+  // or from_wing/from_room). MCP tool_list_tunnels returns the nested shape;
+  // tool_find_tunnels / tool_follow_tunnels return similar nested objects.
+  function tunnelEndpoint(t, side) {
+    const nested = t && t[side];
+    if (nested && typeof nested === "object") {
+      return { wing: nested.wing || "?", room: nested.room || "?" };
+    }
+    if (side === "source") {
+      return { wing: t.source_wing || t.from_wing || "?", room: t.source_room || t.from_room || "?" };
+    }
+    return { wing: t.target_wing || t.to_wing || "?", room: t.target_room || t.to_room || "?" };
+  }
+
+  // Jump to a wing/room in the main UI and close Lab. Works by clicking the
+  // existing nav buttons, so we inherit whatever selection logic app.js uses.
+  //
+  // Tries name variants because tunnel-storage and drawer-storage normalize
+  // wing names differently (tunnels: "home_assistant", drawers: "home-assistant").
+  // Tracked upstream as MemPalace/mempalace#1621.
+  function findNavButton(selector, name) {
+    if (!name || name === "?") return null;
+    const variants = [name, name.replace(/_/g, "-"), name.replace(/-/g, "_")];
+    for (const variant of variants) {
+      const btn = document.querySelector(`${selector}[data-${selector.includes("wing") ? "wing" : "room"}="${CSS.escape(variant)}"]`);
+      if (btn) return btn;
+    }
+    return null;
+  }
+
+  function navigateToRoom(wing, room) {
+    const wingBtn = findNavButton("#wingNav .nav-item", wing);
+    if (!wingBtn) return false;
+    wingBtn.click();
+    if (room && room !== "?") {
+      // app.js renders roomNav synchronously after a wing click.
+      const roomBtn = findNavButton("#roomNav .room-item", room);
+      if (roomBtn) roomBtn.click();
+    }
+    closeLab();
+    return true;
+  }
+
   function renderTunnels(target, data) {
     const el = $(target);
     if (!el) return;
     const tunnels = (data && (data.tunnels || data.connections || data.results || data.items)) || [];
-    if (!tunnels.length) { renderJson(target, data); return; }
-    const rows = tunnels.map((t) => {
+    if (!tunnels.length) { renderEmpty(target, "No tunnels yet."); return; }
+    const rows = tunnels.map((t, idx) => {
       const id = t.tunnel_id || t.id || "";
-      const src = `${escapeHtml(t.source_wing || t.from_wing || "?")}/${escapeHtml(t.source_room || t.from_room || "?")}`;
-      const dst = `${escapeHtml(t.target_wing || t.to_wing || "?")}/${escapeHtml(t.target_room || t.to_room || "?")}`;
+      const s = tunnelEndpoint(t, "source");
+      const d = tunnelEndpoint(t, "target");
+      const src = `${escapeHtml(s.wing)}/${escapeHtml(s.room)}`;
+      const dst = `${escapeHtml(d.wing)}/${escapeHtml(d.room)}`;
       const label = t.label ? `<div class="lab-tunnel-label">${escapeHtml(t.label)}</div>` : "";
       const delBtn = id ? `<button class="icon-button danger-button lab-tunnel-del" data-tunnel-id="${escapeHtml(id)}" type="button">Delete</button>` : "";
-      return `<div class="lab-tunnel"><div class="lab-tunnel-route"><strong>${src}</strong> <span class="lab-arrow">→</span> <strong>${dst}</strong></div>${label}<div class="lab-tunnel-meta"><code>${escapeHtml(id)}</code>${delBtn}</div></div>`;
+      const srcAttr = `data-jump-wing="${escapeHtml(s.wing)}" data-jump-room="${escapeHtml(s.room)}"`;
+      const dstAttr = `data-jump-wing="${escapeHtml(d.wing)}" data-jump-room="${escapeHtml(d.room)}"`;
+      return `<div class="lab-tunnel" data-tunnel-idx="${idx}">`
+        + `<div class="lab-tunnel-route">`
+        +   `<button class="lab-tunnel-jump" type="button" ${srcAttr} title="Open ${src}">${src}</button>`
+        +   `<span class="lab-arrow">→</span>`
+        +   `<button class="lab-tunnel-jump" type="button" ${dstAttr} title="Open ${dst}">${dst}</button>`
+        + `</div>`
+        + `${label}`
+        + `<div class="lab-tunnel-meta"><code>${escapeHtml(id)}</code>${delBtn}</div>`
+        + `</div>`;
     }).join("");
     el.innerHTML = `<div class="lab-summary">${tunnels.length} tunnel(s)</div>${rows}`;
+    el.querySelectorAll(".lab-tunnel-jump").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        navigateToRoom(btn.dataset.jumpWing, btn.dataset.jumpRoom);
+      });
+    });
     el.querySelectorAll(".lab-tunnel-del").forEach((btn) => {
       btn.addEventListener("click", async () => {
         if (!confirm(`Delete tunnel ${btn.dataset.tunnelId}?`)) return;

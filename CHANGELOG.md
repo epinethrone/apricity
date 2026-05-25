@@ -8,6 +8,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 _No unreleased changes._
 
+## [0.4.2] — 2026-05-26
+
+### Fixed
+- **Lab → Tunnels rendered every row as `?/? → ?/?`.** The Tunnels renderer was reading flat keys (`source_wing` / `source_room` / `target_wing` / `target_room` / `from_*` / `to_*`) but `tool_list_tunnels` returns nested `{source: {wing, room}, target: {wing, room}}`. None of the legacy flat keys ever matched, so every row fell through to the literal `"?"` placeholder. The renderer now reads the nested shape first and falls back to the flat keys for compatibility with any future tool that returns the flatter form.
+
+### Added
+- **Click-to-jump on tunnel rows.** Wing/room labels in each tunnel row are now buttons. Clicking either endpoint navigates to that wing+room in the main dashboard view and closes the Lab sheet, so tunnels are useful for actual exploration instead of just listing. The lookup tries both `name`, `name.replace("_","-")`, and `name.replace("-","_")` to bridge the wing-name normalization mismatch between tunnel storage and drawer storage (tracked as [MemPalace#1621](https://github.com/MemPalace/mempalace/issues/1621)).
+- **Auto-load on tab open.** Opening the Tunnels tab in Lab now fires the list immediately, so you don't have to click *List tunnels* on every visit. Fires once per page load.
+
 ## [0.4.1] — 2026-05-24
 
 ### Added
@@ -105,7 +114,8 @@ _No unreleased changes._
 - URL state for current wing / room / drawer / query / sort.
 - Keyboard shortcuts (`⌘K`, `Esc`, `R`).
 
-[Unreleased]: https://github.com/epinethrone/mempalace-frontend/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/epinethrone/mempalace-frontend/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/epinethrone/mempalace-frontend/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/epinethrone/mempalace-frontend/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/epinethrone/mempalace-frontend/compare/v0.3.3...v0.4.0
 [0.3.3]: https://github.com/epinethrone/mempalace-frontend/compare/v0.3.2...v0.3.3
