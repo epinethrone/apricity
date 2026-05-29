@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="https://raw.githubusercontent.com/epinethrone/mempalace-frontend/main/mempalace_dashboard/static/mempalace-logo-transparent.png" alt="MemPalace Dashboard" width="148" />
+  <img src="https://raw.githubusercontent.com/epinethrone/apricity/main/mempalace_dashboard/static/apricity-logo.png" alt="Apricity" width="148" />
 
   <h1>MemPalace Dashboard</h1>
 
