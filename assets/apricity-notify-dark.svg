@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 200" width="760" height="200" role="img" aria-label="Apricity notifications: a bell rings as toasts from Claude, Codex, and Gemini cascade in one by one, each showing whether a memory was created or updated">
+  <title>Apricity — notifications cascade with per-model avatars (dark)</title>
+  <defs>
+    <style>
+      .nm{fill:#f5f5f7;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text','Segoe UI',sans-serif;font-size:13px;font-weight:600}
+      .msg{font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text','Segoe UI',sans-serif;font-size:12px}
+      .mut{fill:#8e8e93}
+      .ts{fill:#6e6e73;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text','Segoe UI',sans-serif;font-size:11px}
+      .verbC{fill:#7cc1de;font-weight:600}
+      .verbU{fill:#e0b44a;font-weight:600}
+    </style>
+    <filter id="nsd" x="-15%" y="-25%" width="130%" height="150%">
+      <feDropShadow dx="0" dy="2" stdDeviation="7" flood-color="#000000" flood-opacity="0.30"/>
+    </filter>
+    <linearGradient id="gemd" x1="0" y1="1" x2="0.69" y2="0.30">
+      <stop offset="0" stop-color="#1C7DFF"/><stop offset="0.52" stop-color="#1C69FF"/><stop offset="1" stop-color="#F0DCD6"/>
+    </linearGradient>
+  </defs>
+
+  <!-- ===== Bell anchor ===== -->
+  <circle cx="78" cy="100" r="24" fill="#1c1c1e" stroke="#38383b" stroke-width="1"/>
+  <g transform="translate(66,88)">
+    <g fill="none" stroke="#a1a1a6" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round">
+      <animateTransform attributeName="transform" type="rotate" dur="10s" repeatCount="indefinite" calcMode="spline"
+        keyTimes="0;0.04;0.09;0.14;0.19;0.40;1"
+        values="0 12 3;13 12 3;-10 12 3;7 12 3;-4 12 3;0 12 3;0 12 3"
+        keySplines="0.4 0 0.6 1;0.4 0 0.6 1;0.4 0 0.6 1;0.4 0 0.6 1;0.4 0 0.6 1;0 0 1 1"/>
+      <path d="M12 3a5 5 0 0 0-5 5v3.4c0 1.1-.4 2.2-1.2 3L4 16h16l-1.8-1.6a4 4 0 0 1-1.2-3V8a5 5 0 0 0-5-5Z"/>
+      <path d="M10 19a2 2 0 0 0 4 0"/>
+    </g>
+  </g>
+  <!-- count badge: white pill + red number, grouped -->
+  <g opacity="0">
+    <animate attributeName="opacity" dur="10s" repeatCount="indefinite" calcMode="spline"
+      keyTimes="0;0.10;0.16;0.86;0.90;1" values="0;0;1;1;0;0" keySplines="0 0 1 1;0.34 1.45 0.64 1;0 0 1 1;0.4 0 1 1;0 0 1 1"/>
+    <circle cx="95" cy="84" r="11" fill="#ffffff"/>
+    <g fill="#fe5f63" font-family="-apple-system,BlinkMacSystemFont,'SF Pro Text',sans-serif" font-size="12" font-weight="700" text-anchor="middle">
+      <text x="95" y="88.5" opacity="0"><animate attributeName="opacity" dur="10s" repeatCount="indefinite" calcMode="discrete" keyTimes="0;0.14;0.24;0.80;0.86;1" values="0;1;0;1;0;0"/>1</text>
+      <text x="95" y="88.5" opacity="0"><animate attributeName="opacity" dur="10s" repeatCount="indefinite" calcMode="discrete" keyTimes="0;0.24;0.34;0.74;0.80;1" values="0;1;0;1;0;0"/>2</text>
+      <text x="95" y="88.5" opacity="0"><animate attributeName="opacity" dur="10s" repeatCount="indefinite" calcMode="discrete" keyTimes="0;0.34;0.74;1" values="0;1;0;0"/>3</text>
+    </g>
+  </g>
+
+  <!-- ===== Toast 1: Claude · Created ===== -->
+  <g filter="url(#nsd)" opacity="0">
+    <animate attributeName="opacity" dur="10s" repeatCount="indefinite" calcMode="spline"
+      keyTimes="0;0.06;0.14;0.74;0.80;1" values="0;0;1;1;0;0" keySplines="0 0 1 1;0.2 0 0.2 1;0 0 1 1;0.4 0 1 1;0 0 1 1"/>
+    <animateTransform attributeName="transform" type="translate" dur="10s" repeatCount="indefinite" calcMode="spline"
+      keyTimes="0;0.06;0.14;0.74;0.80;1" values="34 0;34 0;0 0;0 0;34 0;34 0" keySplines="0 0 1 1;0.34 1.25 0.64 1;0 0 1 1;0.4 0 1 1;0 0 1 1"/>
+    <rect x="126" y="33" width="600" height="44" rx="14" fill="#1c1c1e" stroke="#38383b" stroke-width="1"/>
+    <circle cx="154" cy="55" r="14" fill="#cc785c"/>
+    <g transform="translate(144.4,45.4) scale(0.8)"><path fill="#ffffff" d="M4.709 15.955l4.72-2.647.08-.23-.08-.128H9.2l-.79-.048-2.698-.073-2.339-.097-2.266-.122-.571-.121L0 11.784l.055-.352.48-.321.686.06 1.52.103 2.278.158 1.652.097 2.449.255h.389l.055-.157-.134-.098-.103-.097-2.358-1.596-2.552-1.688-1.336-.972-.724-.491-.364-.462-.158-1.008.656-.722.881.06.225.061.893.686 1.908 1.476 2.491 1.833.365.304.145-.103.019-.073-.164-.274-1.355-2.446-1.446-2.49-.644-1.032-.17-.619a2.97 2.97 0 01-.104-.729L6.283.134 6.696 0l.996.134.42.364.62 1.414 1.002 2.229 1.555 3.03.456.898.243.832.091.255h.158V9.01l.128-1.706.237-2.095.23-2.695.08-.76.376-.91.747-.492.584.28.48.685-.067.444-.286 1.851-.559 2.903-.364 1.942h.212l.243-.242.985-1.306 1.652-2.064.73-.82.85-.904.547-.431h1.033l.76 1.129-.34 1.166-1.064 1.347-.881 1.142-1.264 1.7-.79 1.36.073.11.188-.02 2.856-.606 1.543-.28 1.841-.315.833.388.091.395-.328.807-1.969.486-2.309.462-3.439.813-.042.03.049.061 1.549.146.662.036h1.622l3.02.225.79.522.474.638-.079.485-1.215.62-1.64-.389-3.829-.91-1.312-.329h-.182v.11l1.093 1.068 2.006 1.81 2.509 2.33.127.578-.322.455-.34-.049-2.205-1.657-.851-.747-1.926-1.62h-.128v.17l.444.649 2.345 3.521.122 1.08-.17.353-.607.213-.668-.122-1.374-1.925-1.415-2.167-1.143-1.943-.14.08-.674 7.254-.316.37-.729.28-.607-.461-.322-.747.322-1.476.389-1.924.315-1.53.286-1.9.17-.632-.012-.042-.14.018-1.434 1.967-2.18 2.945-1.726 1.845-.413.164-.717-.37.066-.662.401-.589 2.388-3.036 1.44-1.882.93-1.086-.006-.158h-.055L4.132 18.56l-1.13.146-.487-.456.061-.746.231-.243 1.908-1.312-.006.006z"/></g>
+    <text x="181" y="51" class="nm">Claude</text>
+    <text x="181" y="67" class="msg"><tspan class="verbC">Created</tspan> <tspan class="mut">“Pi swap-file tuning”</tspan></text>
+    <text x="710" y="51" text-anchor="end" class="ts">now</text>
+  </g>
+
+  <!-- ===== Toast 2: Codex · Updated ===== -->
+  <g filter="url(#nsd)" opacity="0">
+    <animate attributeName="opacity" dur="10s" repeatCount="indefinite" calcMode="spline"
+      keyTimes="0;0.16;0.24;0.80;0.86;1" values="0;0;1;1;0;0" keySplines="0 0 1 1;0.2 0 0.2 1;0 0 1 1;0.4 0 1 1;0 0 1 1"/>
+    <animateTransform attributeName="transform" type="translate" dur="10s" repeatCount="indefinite" calcMode="spline"
+      keyTimes="0;0.16;0.24;0.80;0.86;1" values="34 0;34 0;0 0;0 0;34 0;34 0" keySplines="0 0 1 1;0.34 1.25 0.64 1;0 0 1 1;0.4 0 1 1;0 0 1 1"/>
+    <rect x="126" y="85" width="600" height="44" rx="14" fill="#1c1c1e" stroke="#38383b" stroke-width="1"/>
+    <circle cx="154" cy="107" r="14" fill="#0d0d0d" stroke="#3a3a3d" stroke-width="1"/>
+    <g transform="translate(144.4,97.4) scale(0.8)"><path fill="#ffffff" d="M21.55 10.004a5.416 5.416 0 00-.478-4.501c-1.217-2.09-3.662-3.166-6.05-2.66A5.59 5.59 0 0010.831 1C8.39.995 6.224 2.546 5.473 4.838A5.553 5.553 0 001.76 7.496a5.487 5.487 0 00.691 6.5 5.416 5.416 0 00.477 4.502c1.217 2.09 3.662 3.165 6.05 2.66A5.586 5.586 0 0013.168 23c2.443.006 4.61-1.546 5.361-3.84a5.553 5.553 0 003.715-2.66 5.488 5.488 0 00-.69-6.497v.001zm-8.382 11.706a4.155 4.155 0 01-2.667-.965c.034-.018.093-.05.132-.074l4.428-2.558a.72.72 0 00.364-.63v-6.246l1.871 1.081a.067.067 0 01.036.052v5.17c-.003 2.292-1.86 4.149-4.154 4.17h-.01zm-8.934-3.817a4.155 4.155 0 01-.497-2.793c.033.02.09.055.131.078l4.428 2.558a.72.72 0 00.728 0l5.406-3.122v2.16a.068.068 0 01-.027.058L9.66 19.46c-1.99 1.146-4.532.464-5.68-1.524l.001-.043zm-1.164-9.66A4.145 4.145 0 014.86 6.378v5.265a.696.696 0 00.363.63l5.406 3.12-1.871 1.082a.069.069 0 01-.063.006L4.218 13.9c-1.985-1.15-2.666-3.69-1.52-5.68l-.029.013zm15.383 3.58l-5.406-3.122 1.87-1.08a.069.069 0 01.064-.006l4.478 2.586c1.987 1.147 2.668 3.69 1.52 5.677a4.147 4.147 0 01-1.835 1.738v-5.265a.695.695 0 00-.36-.63l-.801.102zm1.861-2.8a6.388 6.388 0 00-.131-.078l-4.428-2.558a.72.72 0 00-.728 0L11.014 9.58V7.42a.068.068 0 01.027-.058l4.479-2.585c1.99-1.148 4.535-.464 5.681 1.527.493.853.669 1.852.498 2.815l-.013-.001zM9.99 12.85L8.118 11.77a.067.067 0 01-.036-.052V6.55c.001-2.295 1.863-4.154 4.16-4.153a4.155 4.155 0 012.664.969 3.6 3.6 0 00-.132.073l-4.428 2.558a.718.718 0 00-.363.63l-.003 6.243.01.001v-.022z"/></g>
+    <text x="181" y="103" class="nm">Codex</text>
+    <text x="181" y="119" class="msg"><tspan class="verbU">Updated</tspan> <tspan class="mut">“Disk-pressure runbook”</tspan></text>
+    <text x="710" y="103" text-anchor="end" class="ts">1m</text>
+  </g>
+
+  <!-- ===== Toast 3: Gemini · Created ===== -->
+  <g filter="url(#nsd)" opacity="0">
+    <animate attributeName="opacity" dur="10s" repeatCount="indefinite" calcMode="spline"
+      keyTimes="0;0.26;0.34;0.86;0.92;1" values="0;0;1;1;0;0" keySplines="0 0 1 1;0.2 0 0.2 1;0 0 1 1;0.4 0 1 1;0 0 1 1"/>
+    <animateTransform attributeName="transform" type="translate" dur="10s" repeatCount="indefinite" calcMode="spline"
+      keyTimes="0;0.26;0.34;0.86;0.92;1" values="34 0;34 0;0 0;0 0;34 0;34 0" keySplines="0 0 1 1;0.34 1.25 0.64 1;0 0 1 1;0.4 0 1 1;0 0 1 1"/>
+    <rect x="126" y="137" width="600" height="44" rx="14" fill="#1c1c1e" stroke="#38383b" stroke-width="1"/>
+    <circle cx="154" cy="159" r="14" fill="url(#gemd)"/>
+    <g transform="translate(143.2,148.2) scale(0.9)"><path fill="#ffffff" d="M12 24A14.304 14.304 0 000 12 14.304 14.304 0 0012 0a14.305 14.305 0 0012 12 14.305 14.305 0 00-12 12"/></g>
+    <text x="181" y="155" class="nm">Gemini</text>
+    <text x="181" y="171" class="msg"><tspan class="verbC">Created</tspan> <tspan class="mut">“HA Green architecture”</tspan></text>
+    <text x="710" y="155" text-anchor="end" class="ts">2m</text>
+  </g>
+</svg>

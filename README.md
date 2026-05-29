@@ -106,6 +106,17 @@ It is *not* a memory system of its own — it reads and writes an existing MemPa
 - **Tunnels** — cross-room / cross-wing links surfaced inline as room chips; create and delete them, bind them to specific memories, and inspect them on a dedicated tunnel page.
 
 ### Stay in the loop
+
+<div align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/apricity-notify-dark.svg" />
+    <source media="(prefers-color-scheme: light)" srcset="assets/apricity-notify-light.svg" />
+    <img alt="Apricity's notification bell ringing as toasts from Claude, Codex, and Gemini cascade in, each tagged created or updated" src="assets/apricity-notify-light.svg" width="660" />
+  </picture>
+  <br />
+  <sub>The bell rings as each model files or revises a memory — per-model avatars, <strong>created</strong> vs <strong>updated</strong> at a glance.</sub>
+</div>
+
 - **Notifications** — a bell that surfaces newly created and updated memories with the originating model's avatar (Claude, Codex, …), distinguishing *created* from *updated*.
 - **Recently-updated markers** — memories touched recently get a relative-time marker that clears once you've viewed them.
 - **Live polling** — optional background refresh (15 / 30 / 60 s) that pauses when the tab is hidden, with an optional sound and LAN-wide "seen" sync so dismissing on one device clears it everywhere.
