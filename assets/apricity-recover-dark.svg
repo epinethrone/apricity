@@ -35,12 +35,12 @@
   </rect>
 
   <!-- ===== THE CARD — one element that slides left -> right -> left ===== -->
-  <g filter="url(#shd)">
+  <g>
     <animateTransform attributeName="transform" type="translate" dur="9s" repeatCount="indefinite" calcMode="spline"
       keyTimes="0;0.18;0.34;0.66;0.82;1" values="0 0;0 0;356 0;356 0;0 0;0 0"
       keySplines="0 0 1 1;0.42 0 0.2 1;0 0 1 1;0.42 0 0.2 1;0 0 1 1"/>
 
-    <rect x="52" y="40" width="300" height="122" rx="16" fill="#1c1c1e" stroke="#38383b" stroke-width="1"/>
+    <rect x="52" y="40" width="300" height="122" rx="16" filter="url(#shd)" fill="#1c1c1e" stroke="#38383b" stroke-width="1"/>
     <rect x="64" y="56" width="4" height="90" rx="2" fill="#3f94ba">
       <animate attributeName="fill" dur="9s" repeatCount="indefinite" calcMode="discrete"
         keyTimes="0;0.18;0.82" values="#3f94ba;#fe5f63;#3f94ba"/>

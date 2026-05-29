@@ -35,13 +35,13 @@
   </rect>
 
   <!-- ===== THE CARD — one element that slides left -> right -> left ===== -->
-  <g filter="url(#sh)">
+  <g>
     <animateTransform attributeName="transform" type="translate" dur="9s" repeatCount="indefinite" calcMode="spline"
       keyTimes="0;0.18;0.34;0.66;0.82;1" values="0 0;0 0;356 0;356 0;0 0;0 0"
       keySplines="0 0 1 1;0.42 0 0.2 1;0 0 1 1;0.42 0 0.2 1;0 0 1 1"/>
 
     <!-- card body -->
-    <rect x="52" y="40" width="300" height="122" rx="16" fill="#ffffff" stroke="#e6e6e9" stroke-width="1"/>
+    <rect x="52" y="40" width="300" height="122" rx="16" filter="url(#sh)" fill="#ffffff" stroke="#e6e6e9" stroke-width="1"/>
     <!-- accent strip: blue in Memories, red once deleted -->
     <rect x="64" y="56" width="4" height="90" rx="2" fill="#3f94ba">
       <animate attributeName="fill" dur="9s" repeatCount="indefinite" calcMode="discrete"
