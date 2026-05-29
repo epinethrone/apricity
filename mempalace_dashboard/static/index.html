@@ -1,78 +1,120 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" class="page-loading">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>MemPalace Dashboard — local web UI for your MemPalace memory store</title>
+    <!-- CRITICAL inline script — runs SYNCHRONOUSLY before the body is
+         parsed or painted, so JS-restored layout state is in place for
+         the very FIRST paint. This eliminates the reload layout-shift
+         that a deferred script can't: `defer` only guarantees execution
+         before DOMContentLoaded, NOT before first paint, so under fast
+         repeated reloads the browser paints the fallback widths first
+         and the panels visibly snap when the deferred script catches up.
+         Primed here (all read from localStorage, available synchronously):
+           • --rooms-w / --drawers-w: the resizable pane widths. The
+             brand block is `flex: 0 0 var(--rooms-w)` and the search is
+             `calc(var(--drawers-w) + 60px)`, so a wrong first-paint
+             value shifts the whole top bar (search box "spawns left
+             then snaps right").
+           • data-theme: the resolved light/dark palette. Without this,
+             an explicit theme that differs from the OS preference would
+             paint with the OS palette first (via @media prefers-color-
+             scheme), then FLIP when the deferred app.js sets data-theme
+             — a full-page colour flash. The theme-button sun/moon icon
+             is driven purely by CSS off this same attribute (both SVGs
+             live in the static #themeIcon; CSS shows the right one), so
+             the icon is correct on first paint too — no pop-in.
+         Wrapped in try/catch — on any failure the CSS calc() fallbacks
+         (300px / 480px) + @media palette apply, i.e. the pre-existing
+         behaviour. app.js's applyTheme() re-applies the same attribute
+         idempotently. -->
+    <script>
+      (function () {
+        try {
+          var panes = { "--rooms-w": [200, 600, 300], "--drawers-w": [280, 900, 480] };
+          for (var v in panes) {
+            var b = panes[v], px = b[2];
+            var raw = localStorage.getItem("mempalace-pane" + v);
+            var n = raw == null ? NaN : parseInt(raw, 10);
+            if (isFinite(n)) px = Math.min(b[1], Math.max(b[0], n));
+            document.documentElement.style.setProperty(v, px + "px");
+          }
+        } catch (e) {}
+        try {
+          // Mirror applyTheme()'s resolution EXACTLY: explicit
+          // "light"/"dark" → set data-theme; "auto" or unset → leave it
+          // off so the CSS @media query drives the palette.
+          var mode = localStorage.getItem("mempalace-theme");
+          if (mode === "light" || mode === "dark") {
+            document.documentElement.dataset.theme = mode;
+          }
+        } catch (e) {}
+      })();
+    </script>
+    <title>Apricity — MemPalace Companion</title>
     <meta
       name="description"
       content="A local, zero-dependency web UI for browsing, curating, and reasoning about a MemPalace personal-memory store. Runs on 127.0.0.1; nothing leaves your machine."
     />
-    <meta name="application-name" content="MemPalace Dashboard" />
+    <meta name="application-name" content="Apricity" />
     <meta name="keywords" content="MemPalace, AI memory, knowledge graph, local-first, ChromaDB, MCP, personal knowledge base, dashboard" />
     <link rel="canonical" href="https://github.com/epinethrone/mempalace-frontend" />
-    <link rel="icon" href="/favicon.ico?v=3" sizes="any" />
-    <link rel="icon" type="image/png" href="/favicon-32.png?v=3" sizes="32x32" />
-    <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=3" />
+    <!-- Apricity favicon set, generated from apricity-logo.png via
+         Pillow LANCZOS downscale. The .ico is a multi-resolution
+         bundle (16/32/48) for the legacy /favicon.ico auto-request
+         that some browsers and crawlers still issue. The PNGs handle
+         everything else: 32 for tab icons, 192 for Android home
+         screen, 180 for Apple touch icons. Safari is especially picky
+         about touch icons being roughly the size they're displayed —
+         the earlier 2000×2000 source was being silently dropped. -->
+    <link rel="icon" href="/favicon.ico?v=5" sizes="any" />
+    <link rel="icon" type="image/png" href="/favicon-32.png?v=5" sizes="32x32" />
+    <link rel="icon" type="image/png" href="/android-chrome-192.png?v=5" sizes="192x192" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=5" />
     <meta name="theme-color" content="#f5f5f7" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)" />
 
     <!-- Open Graph -->
     <meta property="og:type" content="website" />
-    <meta property="og:site_name" content="MemPalace Dashboard" />
-    <meta property="og:title" content="MemPalace Dashboard" />
+    <meta property="og:site_name" content="Apricity" />
+    <meta property="og:title" content="Apricity — MemPalace Companion" />
     <meta
       property="og:description"
       content="A local, zero-dependency web UI for browsing, curating, and reasoning about a MemPalace personal-memory store."
     />
     <meta property="og:url" content="https://github.com/epinethrone/mempalace-frontend" />
-    <meta property="og:image" content="/mempalace-logo.png" />
+    <meta property="og:image" content="/apricity-logo.png" />
 
     <!-- Twitter / X -->
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="MemPalace Dashboard" />
+    <meta name="twitter:title" content="Apricity — MemPalace Companion" />
     <meta
       name="twitter:description"
       content="A local, zero-dependency web UI for browsing, curating, and reasoning about a MemPalace personal-memory store."
     />
-    <meta name="twitter:image" content="/mempalace-logo.png" />
+    <meta name="twitter:image" content="/apricity-logo.png" />
 
-    <link rel="stylesheet" href="/styles.css?v=50" />
+    <link rel="stylesheet" href="/styles.css?v=350" />
   </head>
   <body>
     <div class="shell">
-      <aside class="sidebar">
-        <div class="brand">
-          <div class="brand-mark">
-            <img
-              src="/mempalace-logo-transparent.png"
-              alt="MemPalace logo"
-              class="brand-logo"
-            />
+      <header class="topbar">
+        <div class="topbar-inner">
+          <div class="brand">
+            <div class="brand-mark">
+              <img
+                src="/apricity-logo.png?v=1"
+                alt="Apricity logo"
+                class="brand-logo"
+                decoding="async"
+                fetchpriority="high"
+              />
+            </div>
+            <div class="brand-text">
+              <div class="brand-name">Apricity</div>
+              <div class="brand-subtitle">MemPalace Companion</div>
+            </div>
           </div>
-          <div>
-            <div class="brand-name">MemPalace</div>
-            <div class="brand-subtitle">Local memory</div>
-          </div>
-        </div>
-
-        <nav class="nav" id="wingNav"></nav>
-
-        <div class="sidebar-footer">
-          <button class="nav-item sidebar-action" id="settingsBtn" type="button" aria-label="Open settings">
-            <span class="sidebar-action-label">
-              <svg class="sidebar-action-icon" viewBox="0 0 24 24" aria-hidden="true">
-                <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.6"/>
-                <path d="M19.4 12a7.5 7.5 0 0 0-.08-1.16l2.07-1.62-2-3.46-2.45.98a7.5 7.5 0 0 0-2-1.16L14.5 2h-4l-.44 2.58a7.5 7.5 0 0 0-2 1.16l-2.45-.98-2 3.46 2.07 1.62A7.5 7.5 0 0 0 5.6 12c0 .4.03.78.08 1.16L3.6 14.78l2 3.46 2.45-.98c.6.47 1.27.86 2 1.16L10.5 21h4l.44-2.58c.73-.3 1.4-.69 2-1.16l2.45.98 2-3.46-2.07-1.62c.05-.38.08-.77.08-1.16Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
-              </svg>
-              Settings
-            </span>
-          </button>
-        </div>
-      </aside>
-
-      <main class="main">
-        <header class="topbar">
           <div class="search" role="search">
             <svg class="search-icon" viewBox="0 0 24 24" aria-hidden="true">
               <circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="1.7"/>
@@ -87,8 +129,63 @@
             <kbd class="hint" id="searchHint">⌘K</kbd>
           </div>
           <div class="top-actions">
+            <!-- Content actions: Tools (when enabled in Settings), Write, Drafts.
+                 Primary action (Write, filled blue) leads the cluster — Apple's
+                 toolbar pattern for content-creation (Mail's "New Message" is
+                 leftmost, Gmail's "Compose" leads its sidebar). The cancel-
+                 left / confirm-right convention applies to form dialogs, not
+                 toolbars. Drafts as the supporting "queue of work-in-progress
+                 writes" naturally follows the primary action. -->
+            <!-- hidden by default in static HTML so the button never
+                 FLASHES visible before JS reads the show-tools pref.
+                 The pre-paint IIFE in app.js (gatePreHydrationVisibility)
+                 removes `hidden` synchronously when the pref is on, and
+                 applyShowTools() keeps it in sync afterward. -->
+            <button class="icon-button toolbar-button" id="labBtn" type="button" hidden aria-label="Open Tools" title="MemPalace Tools — ops, writes, advanced queries">Tools</button>
+            <button class="write-open" id="writeOpen" type="button">Write</button>
             <button class="icon-button toolbar-button" id="draftsBtn" type="button" aria-label="View drafts" title="Drafts">Drafts<span class="badge hidden" id="draftsBadge">0</span></button>
-            <button class="icon-button toolbar-button" id="labBtn" type="button" aria-label="Open Tools" title="MemPalace Tools — ops, writes, advanced queries">Tools</button>
+            <!-- Visual separator between content actions and chrome actions. -->
+            <span class="top-actions-separator" aria-hidden="true"></span>
+            <!-- Chrome actions: Notifications, Trash, Theme, Settings (rightmost). -->
+            <!--
+              Notification bell: shows a badge with the count of
+              recently-updated drawers the user hasn't viewed yet.
+              Click opens a dropdown panel listing each notification
+              with the drawer author's model avatar (Claude orange,
+              Codex green, Gemini blue, Grok dark, Human gray), the
+              drawer title, and a relative timestamp. Each entry
+              click-throughs to the drawer. "Mark all as seen" lives
+              at the bottom of the panel as the bulk-clear escape
+              hatch — handy after a batch edit / mass migration when
+              the badge count is double digits.
+            -->
+            <div class="menu-wrap notifications-menu-wrap">
+              <button class="icon-button toolbar-button icon-only menu-button notifications-bell" id="notificationsBell" type="button" aria-label="Notifications" data-menu="notifications-menu" aria-haspopup="menu" aria-expanded="false" title="Recent updates">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 3a5 5 0 0 0-5 5v3.4c0 1.1-.4 2.2-1.2 3L4 16h16l-1.8-1.6a4 4 0 0 1-1.2-3V8a5 5 0 0 0-5-5Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+                  <path d="M10 19a2 2 0 0 0 4 0" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+                </svg>
+                <span class="notifications-badge hidden" id="notificationsBadge">0</span>
+              </button>
+              <div class="action-menu notifications-menu hidden" role="menu" data-menu-panel="notifications-menu" id="notificationsMenu">
+                <div class="notifications-head">
+                  <span class="notifications-head-title">Recent updates</span>
+                  <span class="notifications-head-count" id="notificationsCount"></span>
+                </div>
+                <div class="notifications-list" id="notificationsList">
+                  <!-- Populated by renderNotifications() in app.js -->
+                </div>
+                <div class="notifications-empty hidden" id="notificationsEmpty">
+                  <span>No new updates.</span>
+                </div>
+                <button class="notifications-mark-all hidden" type="button" id="notificationsMarkAll">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="m5 12 5 5 9-11" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                  <span>Mark all as seen</span>
+                </button>
+              </div>
+            </div>
             <button class="icon-button toolbar-button icon-only" id="trashBtn" type="button" aria-label="View trash" title="Recently deleted">
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M5 7h14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" fill="none"/>
@@ -97,20 +194,74 @@
                 <path d="M10.5 10.5v6M13.5 10.5v6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
               </svg>
             </button>
-            <button class="icon-button toolbar-button icon-only" id="themeToggle" type="button" aria-label="Toggle theme">
-              <svg id="themeIcon" viewBox="0 0 24 24" aria-hidden="true"></svg>
+            <div class="menu-wrap theme-menu-wrap">
+              <button class="icon-button toolbar-button icon-only menu-button" id="themeToggle" type="button" aria-label="Theme" data-menu="theme-menu" aria-haspopup="menu" aria-expanded="false">
+                <!-- Both icons live in static HTML; CSS shows the one
+                     matching the resolved theme (via :root[data-theme]
+                     set by the head script + an @media fallback for
+                     auto). Previously #themeIcon was an EMPTY <svg> that
+                     applyTheme() filled via innerHTML at boot — so it
+                     rendered blank until the deferred app.js ran, which
+                     was the theme-button reload flicker. -->
+                <span id="themeIcon" aria-hidden="true">
+                  <svg class="theme-icon-sun" viewBox="0 0 24 24" aria-hidden="true">
+                    <circle cx="12" cy="12" r="4.5" fill="none" stroke="currentColor" stroke-width="1.7"/>
+                    <path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+                  </svg>
+                  <svg class="theme-icon-moon" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M20 14.4A7.6 7.6 0 1 1 9.6 4a6.1 6.1 0 0 0 10.4 10.4Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+                  </svg>
+                </span>
+              </button>
+              <div class="action-menu theme-menu hidden" role="menu" data-menu-panel="theme-menu">
+                <button class="action-item theme-option" type="button" role="menuitem" data-theme-option="auto">
+                  <svg class="action-icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.6"/>
+                    <path d="M12 3a9 9 0 0 1 0 18Z" fill="currentColor"/>
+                  </svg>
+                  <span class="theme-option-label">Auto</span>
+                  <svg class="theme-option-check" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="m5 12 5 5 9-11" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                </button>
+                <button class="action-item theme-option" type="button" role="menuitem" data-theme-option="light">
+                  <svg class="action-icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <circle cx="12" cy="12" r="4.5" fill="none" stroke="currentColor" stroke-width="1.7"/>
+                    <path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.6 4.6 6.7 6.7M17.3 17.3l2.1 2.1M19.4 4.6 17.3 6.7M6.7 17.3l-2.1 2.1" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" fill="none"/>
+                  </svg>
+                  <span class="theme-option-label">Light</span>
+                  <svg class="theme-option-check" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="m5 12 5 5 9-11" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                </button>
+                <button class="action-item theme-option" type="button" role="menuitem" data-theme-option="dark">
+                  <svg class="action-icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M20.5 14.4A8 8 0 1 1 9.6 3.5a6.8 6.8 0 0 0 10.9 10.9Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+                  </svg>
+                  <span class="theme-option-label">Dark</span>
+                  <svg class="theme-option-check" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="m5 12 5 5 9-11" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                </button>
+              </div>
+            </div>
+            <button class="icon-button toolbar-button icon-only settings-toolbar-button" id="settingsBtn" type="button" aria-label="Open settings" title="Settings">
+              <svg class="settings-fab-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.6"/>
+                <path d="M19.4 12a7.5 7.5 0 0 0-.08-1.16l2.07-1.62-2-3.46-2.45.98a7.5 7.5 0 0 0-2-1.16L14.5 2h-4l-.44 2.58a7.5 7.5 0 0 0-2 1.16l-2.45-.98-2 3.46 2.07 1.62A7.5 7.5 0 0 0 5.6 12c0 .4.03.78.08 1.16L3.6 14.78l2 3.46 2.45-.98c.6.47 1.27.86 2 1.16L10.5 21h4l.44-2.58c.73-.3 1.4-.69 2-1.16l2.45.98 2-3.46-2.07-1.62c.05-.38.08-.77.08-1.16Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+              </svg>
             </button>
-            <button class="write-open" id="writeOpen" type="button">Write</button>
           </div>
-        </header>
+        </div><!-- /.topbar-inner -->
+      </header>
 
-        <section class="stats" id="stats"></section>
-
-        <section class="content-grid">
+      <main class="main">
+        <section class="content-grid detail-hidden">
           <div class="panel rooms-panel">
             <div class="panel-header">
               <div>
-                <h2>Rooms</h2>
+                <!-- Title text is swapped per view in renderRooms (Wings → Rooms). -->
+                <h2 id="roomNavTitle">Wings</h2>
                 <p id="roomCount"></p>
               </div>
             </div>
@@ -118,12 +269,37 @@
           </div>
 
           <div class="panel drawers-panel">
+            <div class="detail-panel-actions drawers-actions">
+              <button
+                class="detail-panel-maximize drawers-panel-maximize"
+                id="drawersPanelMaximize"
+                type="button"
+                aria-label="Browse all memories"
+                title="Browse all"
+              >
+                <svg class="icon-maximize" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+                <svg class="icon-minimize" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M9 4v5H4M15 4v5h5M4 15h5v5M20 15h-5v5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </button>
+            </div>
             <div class="panel-header">
               <div>
                 <h2>Memories</h2>
                 <p id="drawerCount"></p>
               </div>
               <div class="panel-tools">
+                <!--
+                  Inline "Mark read" pill removed 2026-05-28 in favor
+                  of the bell-notification system in the top bar
+                  (see #notificationsBell). The bell surfaces the
+                  same bulk-clear affordance plus richer per-item
+                  context (model avatar + title + relative time +
+                  click-through), which scales better when many
+                  drawers are updated at once.
+                -->
                 <label class="inline-field">
                   <span>Sort</span>
                   <select id="sortSelect" aria-label="Sort drawers">
@@ -139,16 +315,119 @@
           </div>
 
           <div class="panel detail-panel">
-            <div class="detail-empty" id="emptyState">
-              <img
-                src="/mempalace-logo-transparent.png"
-                alt="MemPalace logo"
-                class="empty-logo"
-              />
-              <h2>Select a memory</h2>
-              <p>Choose a memory from the list to inspect its content and metadata.</p>
+            <div class="detail-panel-actions">
+              <button
+                class="detail-panel-close"
+                id="detailPanelClose"
+                type="button"
+                aria-label="Close detail"
+                title="Close"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="m6 6 12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>
+                </svg>
+              </button>
+              <button
+                class="detail-panel-maximize"
+                id="detailPanelMaximize"
+                type="button"
+                aria-label="Maximize detail"
+                title="Maximize"
+              >
+                <svg class="icon-maximize" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+                <svg class="icon-minimize" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M9 4v5H4M15 4v5h5M4 15h5v5M20 15h-5v5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </button>
             </div>
-            <article class="detail hidden" id="detail"></article>
+            <!-- Static skeleton: a FEATURELESS grey .detail-meta band
+                 (no labels, no values) ships in the HTML so the grey
+                 banner + divider are painted from the first frame at the
+                 fixed strip height. There are deliberately NO text cells
+                 — an earlier version with blank "Drawer/Date/…" labels +
+                 empty values showed those placeholders during the async
+                 boot gap and then visibly swapped to real values (the
+                 text/divider flicker). With an empty band, the only
+                 transition is grey-bar → grey-bar-with-real-text, once,
+                 when the live render replaces this node. #detail stays
+                 .hidden until a drawer is open; the deferred prime IIFE
+                 un-hides it pre-paint when the hash has d=…. The fixed
+                 .detail-meta height keeps the divider locked so the
+                 single swap doesn't move it. .detail-skeleton marks the
+                 node for teardown on first real content. -->
+            <article class="detail hidden detail-skeleton" id="detail">
+              <div class="detail-meta detail-meta-skeleton" aria-hidden="true"></div>
+            </article>
+            <button
+              class="detail-panel-edit"
+              id="detailPanelEdit"
+              type="button"
+              aria-label="Edit memory"
+              title="Edit memory"
+            >
+              <!-- Default state: pencil. Edit mode: animated check. CSS
+                   toggles via .content-grid.detail-editing, same pattern
+                   the maximize/minimize button uses. -->
+              <svg class="icon-edit-pencil" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="m4 20 4-1 11-11-3-3-11 11-1 4z" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/>
+                <path d="m13 6 5 5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
+              </svg>
+              <svg class="icon-edit-check" viewBox="0 0 24 24" aria-hidden="true">
+                <path class="icon-edit-check-path" d="m5 12 5 5 9-11" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
+            <button
+              class="detail-panel-delete"
+              id="detailPanelDelete"
+              type="button"
+              aria-label="Delete memory"
+              title="Delete memory"
+            >
+              <!-- Default state: red trash. Edit mode: hollow grey X
+                   (cancel). Same icon-swap pattern as the edit button. -->
+              <svg class="icon-delete-trash" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M5 8h14M7 8v12h10V8M10 5h4v3" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+              <svg class="icon-delete-cancel" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="m7 7 10 10M17 7 7 17" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>
+              </svg>
+            </button>
+            <!-- Retry button: shown only when the current drawer has
+                 a failedSave entry. Matches .detail-panel-edit /
+                 .detail-panel-delete styling (52px circle, same
+                 entrance animation, same click-pop). Click → re-fire
+                 the cached attempted save via /api/memories/update. -->
+            <button
+              class="detail-panel-retry hidden"
+              id="detailPanelRetry"
+              type="button"
+              aria-label="Retry failed save"
+              title="Retry save"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M4 12a8 8 0 1 0 2.3-5.6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
+                <path d="M3 4v5h5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
+            <!-- Tunnel-bind indicator: floating column anchored to the
+                 right side at the same vertical position as the editor
+                 toolbar's wing/room chips on the left. One chip per
+                 tunnel, populated by renderDrawerDetail. Each chip shows
+                 the LINKED memory's title + a small graph-edge glyph;
+                 click → navigates to that memory. In edit mode the
+                 corner × fades in for inline unbind. Hidden by default
+                 — JS adds the content + removes .hidden. The horizontal-
+                 glyph watermark that signals "this is linked" lives
+                 inside the meta strip's background (not as a sibling
+                 element here) so it's visible at non-enlarged sizes
+                 where the floating chip column is suppressed. -->
+            <div
+              class="detail-panel-tunnel-info hidden"
+              id="detailPanelTunnelInfo"
+              aria-hidden="true"
+            ></div>
           </div>
         </section>
 
@@ -159,7 +438,7 @@
               <p id="factCount"></p>
             </div>
             <div class="panel-tools">
-              <div class="view-toggle" role="tablist" aria-label="Knowledge graph view">
+              <div class="view-toggle" id="factsViewToggle" role="tablist" aria-label="Knowledge graph view">
                 <button class="view-toggle-btn active" id="factsViewList" type="button" role="tab" aria-selected="true">List</button>
                 <button class="view-toggle-btn" id="factsViewGraph" type="button" role="tab" aria-selected="false">Graph</button>
               </div>
@@ -169,12 +448,14 @@
           <div class="facts" id="facts"></div>
           <div class="facts-graph hidden" id="factsGraph"></div>
         </section>
+      </main>
 
-        <footer class="footer">
+      <footer class="footer">
+        <div class="footer-inner">
           <div class="footer-brand">
             <div>
-              <strong>MemPalace Dashboard</strong>
-              <span>Local-first memory · open source</span>
+              <strong>Apricity</strong>
+              <span>MemPalace Companion · open source</span>
             </div>
             <a
               id="footerRepoLink"
@@ -189,9 +470,10 @@
               <span>GitHub</span>
             </a>
           </div>
+          <div class="footer-info" id="statsInfo"></div>
           <div class="footer-info" id="footerInfo"></div>
-        </footer>
-      </main>
+        </div>
+      </footer>
     </div>
 
     <section class="write-sheet hidden" id="writeSheet" aria-label="Write memory">
@@ -202,7 +484,11 @@
             <h2 id="writeSheetTitle">Write Memory</h2>
             <p id="writeSheetSubtitle">Choose where it belongs and save once.</p>
           </div>
-          <button class="icon-button" id="writeClose" type="button" aria-label="Close write panel">Close</button>
+          <button class="icon-button icon-only sheet-close" id="writeClose" type="button" aria-label="Close write panel" title="Close">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m6 6 12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+            </svg>
+          </button>
         </div>
         <div class="write-grid">
           <label class="write-field combo-field" data-combo="wing">
@@ -293,7 +579,11 @@
             <h2>Edit Memory</h2>
             <p id="editSubtitle">Update the stored content and metadata.</p>
           </div>
-          <button class="icon-button" id="editClose" type="button" aria-label="Close edit panel">Close</button>
+          <button class="icon-button icon-only sheet-close" id="editClose" type="button" aria-label="Close edit panel" title="Close">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m6 6 12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+            </svg>
+          </button>
         </div>
         <div class="write-grid">
           <label>
@@ -330,6 +620,7 @@
         <h2 id="deleteTitle">Delete Memory</h2>
         <p id="deleteBody"></p>
         <div class="confirm-warning" id="deleteWarning"></div>
+        <p class="confirm-hint" id="confirmHint">Recoverable from the trash bin.</p>
         <div class="confirm-actions">
           <button class="secondary-action" id="deleteCancel" type="button">Cancel</button>
           <button class="danger-action" id="deleteConfirm" type="button">Delete</button>
@@ -338,12 +629,12 @@
       </div>
     </section>
 
-    <section class="confirm-sheet hidden" id="loginSheet" aria-label="Sign in to MemPalace">
+    <section class="confirm-sheet hidden" id="loginSheet" aria-label="Sign in to Apricity">
       <div class="confirm-backdrop"></div>
       <div class="confirm-panel login-panel">
-        <img src="/mempalace-logo-transparent.png" alt="MemPalace logo" class="login-logo brand-logo" />
+        <img src="/apricity-logo.png?v=1" alt="Apricity logo" class="login-logo brand-logo" />
         <h2>Sign in</h2>
-        <p>Enter your MemPalace credentials.</p>
+        <p>Enter your Apricity credentials.</p>
         <form id="loginForm" class="login-form">
           <label>
             <span>Username</span>
@@ -371,7 +662,11 @@
             <h2>Drafts inbox</h2>
             <p>Staged memories waiting to be filed into the palace.</p>
           </div>
-          <button class="icon-button" id="draftsClose" type="button">Close</button>
+          <button class="icon-button icon-only sheet-close" id="draftsClose" type="button" aria-label="Close drafts" title="Close">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m6 6 12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+            </svg>
+          </button>
         </div>
         <div id="draftsList" class="draft-list"></div>
         <div class="write-status" id="draftsStatus"></div>
@@ -386,7 +681,11 @@
             <h2>Recently deleted</h2>
             <p>Snapshots of removed or replaced memories. Restoring creates a fresh copy with a new ID.</p>
           </div>
-          <button class="icon-button" id="trashClose" type="button">Close</button>
+          <button class="icon-button icon-only sheet-close" id="trashClose" type="button" aria-label="Close Recently deleted" title="Close">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m6 6 12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+            </svg>
+          </button>
         </div>
         <div id="trashList" class="draft-list"></div>
         <div class="write-status" id="trashStatus"></div>
@@ -396,68 +695,592 @@
       </div>
     </section>
 
-    <section class="write-sheet hidden" id="settingsSheet" aria-label="Settings">
+    <!-- ============================================================
+         Settings sheet — macOS Settings-style two-column layout.
+         Left sidebar lists panes; right side renders the active pane
+         only. Floating close (top-right of shell) stays in view as
+         the content scrolls. All input/button IDs are preserved from
+         the previous structure so the existing JS handlers (toggles,
+         shortcuts, save credentials, theme pills, etc.) keep working
+         without rewiring — only the wrapping markup changed.
+         ============================================================ -->
+    <section class="settings-overlay hidden" id="settingsSheet" aria-label="Settings">
       <div class="write-backdrop" id="settingsBackdrop"></div>
-      <form class="write-panel" id="settingsForm">
-        <div class="write-header">
-          <div>
-            <h2>Settings</h2>
-            <p id="settingsSubtitle">Set the credentials used to secure the dashboard.</p>
-          </div>
-          <button class="icon-button" id="settingsClose" type="button">Close</button>
-        </div>
-        <label>
-          <span>Username <span class="required-marker">*</span></span>
-          <input id="settingsUsername" required maxlength="64" autocomplete="username" />
-        </label>
-        <label class="hidden" id="settingsCurrentRow">
-          <span>Current password <span class="required-marker">*</span></span>
-          <input id="settingsCurrentPassword" type="password" autocomplete="current-password" />
-        </label>
-        <div class="write-grid">
-          <label>
-            <span>New password <span class="required-marker">*</span></span>
-            <input id="settingsPassword" type="password" minlength="8" required autocomplete="new-password" />
-          </label>
-          <label>
-            <span>Confirm password <span class="required-marker">*</span></span>
-            <input id="settingsPasswordConfirm" type="password" minlength="8" required autocomplete="new-password" />
-          </label>
-        </div>
-        <small class="field-error hidden" id="settingsMatchError">Passwords don't match.</small>
-        <div class="write-actions-row" style="justify-content: space-between;">
-          <button class="icon-button danger-button" id="logoutBtn" type="button">Sign out</button>
-          <button class="primary-action save-memory" id="saveSettings" type="submit">Save</button>
-        </div>
-        <div class="write-status" id="settingsStatus"></div>
+      <!-- Frame wraps the shell + the dismissal hint as a single column-
+           flex unit so the overlay's place-items:center centers them
+           together. Without the wrap, both the shell and the hint
+           would be independently grid-centered → hint floats at the
+           viewport bottom instead of just below the shell. -->
+      <div class="settings-shell-frame">
+      <!-- Shell-wrap is the positioning ancestor for the floating
+           close pill — sized to the shell's width so the pill's
+           negative offsets anchor against the shell's actual corner
+           rather than the wider frame/overlay. -->
+      <div class="settings-shell-wrap">
+      <form class="settings-shell" id="settingsForm">
 
-        <div class="settings-section">
-          <div class="settings-section-head">
-            <strong>Backup &amp; restore</strong>
-            <span>Download a JSON snapshot of every memory and fact, or merge one back in. Existing items aren't duplicated.</span>
+        <!-- Sidebar nav -->
+        <aside class="settings-nav-pane">
+          <div class="settings-nav-head">
+            <span class="settings-nav-eyebrow">Apricity</span>
+            <h2 class="settings-nav-title">Settings</h2>
           </div>
-          <div class="settings-actions">
-            <button class="icon-button settings-export" id="exportBtn" type="button">
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M12 3v12" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
-                <path d="m7 10 5 5 5-5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
-                <path d="M5 19h14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
-              </svg>
-              <span>Download memories</span>
+          <nav class="settings-nav-list" role="tablist" aria-label="Settings sections">
+            <button class="settings-nav-item is-active" type="button" data-settings-pane="display" role="tab" aria-selected="true">
+              <span class="settings-nav-icon settings-nav-icon-display" aria-hidden="true">
+                <svg viewBox="0 0 24 24">
+                  <circle cx="12" cy="12" r="4" fill="currentColor"/>
+                  <path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M18.4 5.6 17 7M7 17l-1.4 1.4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" fill="none"/>
+                </svg>
+              </span>
+              <span>Display</span>
             </button>
-            <button class="icon-button settings-export" id="importBtn" type="button">
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M12 21V9" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
-                <path d="m7 14 5-5 5 5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
-                <path d="M5 5h14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
-              </svg>
-              <span>Restore from file</span>
+            <button class="settings-nav-item" type="button" data-settings-pane="notifications" role="tab" aria-selected="false">
+              <span class="settings-nav-icon settings-nav-icon-notifications" aria-hidden="true">
+                <svg viewBox="0 0 24 24">
+                  <path d="M6 17v-5a6 6 0 0 1 12 0v5l1.5 2H4.5L6 17Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+                  <path d="M10 21a2 2 0 0 0 4 0" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+                </svg>
+              </span>
+              <span>Notifications</span>
             </button>
-            <input type="file" id="importInput" accept="application/json,.json" class="hidden" />
-          </div>
-          <div class="write-status" id="exportStatus"></div>
-        </div>
+            <button class="settings-nav-item" type="button" data-settings-pane="shortcuts" role="tab" aria-selected="false">
+              <span class="settings-nav-icon settings-nav-icon-shortcuts" aria-hidden="true">
+                <svg viewBox="0 0 24 24">
+                  <rect x="3" y="6" width="18" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/>
+                  <circle cx="7" cy="10" r="0.8" fill="currentColor"/>
+                  <circle cx="11" cy="10" r="0.8" fill="currentColor"/>
+                  <circle cx="15" cy="10" r="0.8" fill="currentColor"/>
+                  <circle cx="19" cy="10" r="0.8" fill="currentColor"/>
+                  <path d="M7 14h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                </svg>
+              </span>
+              <span>Shortcuts</span>
+            </button>
+            <button class="settings-nav-item" type="button" data-settings-pane="trash" role="tab" aria-selected="false">
+              <span class="settings-nav-icon settings-nav-icon-trash" aria-hidden="true">
+                <svg viewBox="0 0 24 24">
+                  <path d="M5 7h14M10 7V5.5A1.5 1.5 0 0 1 11.5 4h1A1.5 1.5 0 0 1 14 5.5V7M7 7h10l-.9 11.2A1.8 1.8 0 0 1 14.3 20H9.7a1.8 1.8 0 0 1-1.8-1.8L7 7Z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </span>
+              <span>Trash</span>
+            </button>
+            <button class="settings-nav-item" type="button" data-settings-pane="backup" role="tab" aria-selected="false">
+              <span class="settings-nav-icon settings-nav-icon-backup" aria-hidden="true">
+                <svg viewBox="0 0 24 24">
+                  <path d="M21 15v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-3M7 10l5 5 5-5M12 15V3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </span>
+              <span>Backup</span>
+            </button>
+            <button class="settings-nav-item" type="button" data-settings-pane="account" role="tab" aria-selected="false">
+              <span class="settings-nav-icon settings-nav-icon-account" aria-hidden="true">
+                <svg viewBox="0 0 24 24">
+                  <circle cx="12" cy="8" r="4" fill="none" stroke="currentColor" stroke-width="1.6"/>
+                  <path d="M4 21c0-4.4 3.6-8 8-8s8 3.6 8 8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+                </svg>
+              </span>
+              <span>Account</span>
+            </button>
+            <button class="settings-nav-item" type="button" data-settings-pane="about" role="tab" aria-selected="false">
+              <span class="settings-nav-icon settings-nav-icon-about" aria-hidden="true">
+                <svg viewBox="0 0 24 24">
+                  <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.6"/>
+                  <path d="M12 8.2v.01" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
+                  <path d="M11 11h1v6h1" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </span>
+              <span>About</span>
+            </button>
+          </nav>
+        </aside>
+
+        <!-- Content pane: only the active .settings-pane is shown. -->
+        <main class="settings-content-pane">
+
+          <!-- ===== DISPLAY ===== -->
+          <section class="settings-pane" data-settings-pane="display" role="tabpanel">
+            <header class="settings-pane-head">
+              <h3>Display</h3>
+              <p>Appearance, interface visibility, and motion preferences.</p>
+            </header>
+
+            <div class="settings-card">
+              <div class="settings-card-row">
+                <div class="settings-card-row-text">
+                  <strong>Theme</strong>
+                  <span>Match the system, or force light/dark. Stays in sync with the top-bar theme button.</span>
+                </div>
+                <div class="settings-theme-options">
+                  <button type="button" class="settings-theme-pill" data-theme-option="auto" aria-label="Theme: Auto">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.6"/>
+                      <path d="M12 3a9 9 0 0 1 0 18Z" fill="currentColor"/>
+                    </svg>
+                    <span>Auto</span>
+                  </button>
+                  <button type="button" class="settings-theme-pill" data-theme-option="light" aria-label="Theme: Light">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <circle cx="12" cy="12" r="4.5" fill="none" stroke="currentColor" stroke-width="1.7"/>
+                      <path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.6 4.6 6.7 6.7M17.3 17.3l2.1 2.1M19.4 4.6 17.3 6.7M6.7 17.3l-2.1 2.1" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" fill="none"/>
+                    </svg>
+                    <span>Light</span>
+                  </button>
+                  <button type="button" class="settings-theme-pill" data-theme-option="dark" aria-label="Theme: Dark">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M20.5 14.4A8 8 0 1 1 9.6 3.5a6.8 6.8 0 0 0 10.9 10.9Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+                    </svg>
+                    <span>Dark</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- ===== INTERFACE ===== -->
+            <h4 class="settings-subsection-head">Interface</h4>
+            <div class="settings-card">
+              <div class="settings-card-row settings-card-row-toggle">
+                <div class="settings-card-row-text">
+                  <strong>Tools panel</strong>
+                  <span>Reveal the <em>Tools</em> button in the top bar (power-user MemPalace operations: tunnels, diary, KG admin, maintenance).</span>
+                </div>
+                <input type="checkbox" id="showToolsToggle" class="settings-switch" />
+              </div>
+              <div class="settings-card-divider"></div>
+              <div class="settings-card-row settings-card-row-toggle">
+                <div class="settings-card-row-text">
+                  <strong>Knowledge graph visualisation</strong>
+                  <span>Adds a <em>Graph</em> tab to the KG panel — a force-directed graph of facts. Off by default; the physics is CPU-heavy on a Pi.</span>
+                </div>
+                <input type="checkbox" id="showKgGraphToggle" class="settings-switch" />
+              </div>
+              <div class="settings-card-divider"></div>
+              <div class="settings-card-row settings-card-row-toggle">
+                <div class="settings-card-row-text">
+                  <strong>Footer info</strong>
+                  <span>Memory + fact + tunnel counts and system info (CPU, disk, version). Off gives a cleaner bottom edge — useful while screen-sharing.</span>
+                </div>
+                <input type="checkbox" id="showFooterInfoToggle" class="settings-switch" />
+              </div>
+              <div class="settings-card-divider"></div>
+              <div class="settings-card-row settings-card-row-toggle">
+                <div class="settings-card-row-text">
+                  <strong>Always show panel controls</strong>
+                  <span>The Memories and Detail panel maximize/close buttons stay opacity 1 at all times. Off (default) hides them until you hover the parent panel — macOS-traffic-light pattern, less visual clutter at rest. Keyboard <em>Tab</em> still reveals them when focus enters either panel.</span>
+                </div>
+                <input type="checkbox" id="panelControlsAlwaysToggle" class="settings-switch" />
+              </div>
+            </div>
+
+            <!-- ===== MEMORIES LIST ===== -->
+            <h4 class="settings-subsection-head">Memories list</h4>
+            <div class="settings-card">
+              <div class="settings-card-row settings-card-row-toggle">
+                <div class="settings-card-row-text">
+                  <strong>Adaptive browse mode</strong>
+                  <span>Memories panel scales its browse-grid to the current list — short lists hide the <em>Browse</em> toggle (just scroll), 11–24 memories show 2 columns, 25–50 show 3, 51+ show 4. Off restores the always-on toggle and fixed 4-column grid.</span>
+                </div>
+                <input type="checkbox" id="adaptiveBrowseToggle" class="settings-switch" />
+              </div>
+              <div class="settings-card-divider"></div>
+              <label class="settings-card-row settings-card-row-select">
+                <div class="settings-card-row-text">
+                  <strong>Default sort</strong>
+                  <span>Which order the memories list opens in. URL deep-links (<em>?s=…</em>) override this for the linked session.</span>
+                </div>
+                <select id="defaultSortSelect" class="settings-select-control">
+                  <option value="filed-desc">Newest first</option>
+                  <option value="filed-asc">Oldest first</option>
+                  <option value="title">Title A→Z</option>
+                  <option value="wing">Wing / room</option>
+                </select>
+              </label>
+            </div>
+
+            <!-- ===== TEXT DISPLAY ===== -->
+            <h4 class="settings-subsection-head">Text display</h4>
+            <div class="settings-card">
+              <div class="settings-card-row settings-card-row-toggle">
+                <div class="settings-card-row-text">
+                  <strong>Polish titles &amp; names</strong>
+                  <span>Display layer prettifies stored text: drawer titles get Title-Cased and trailing <em>(YYYY-MM-DD)</em> stripped, wing/room slugs render as <em>Home Assistant</em> instead of <em>home-assistant</em> (acronyms like HA, API, TV stay all-caps), author names get re-capitalized. Off shows the raw stored values. Storage is never modified either way.</span>
+                </div>
+                <input type="checkbox" id="polishTextToggle" class="settings-switch" />
+              </div>
+              <div class="settings-card-divider"></div>
+              <div class="settings-card-row settings-card-row-toggle">
+                <div class="settings-card-row-text">
+                  <strong>Relative time</strong>
+                  <span>Card kickers and the meta-strip <em>Updated</em> cell show short relative phrases (<em>2h ago</em>, <em>yesterday</em>, <em>3d ago</em>) when recent. Off renders the absolute recorded date (<em>28 May 2026</em>) for every age. The detail panel's <em>Filed</em> cell is always absolute regardless of this setting.</span>
+                </div>
+                <input type="checkbox" id="relativeTimeToggle" class="settings-switch" />
+              </div>
+            </div>
+
+            <!-- ===== MOTION ===== -->
+            <h4 class="settings-subsection-head">Motion</h4>
+            <div class="settings-card">
+              <div class="settings-card-row settings-card-row-toggle">
+                <div class="settings-card-row-text">
+                  <strong>Reduce motion</strong>
+                  <span>Disables the search-ring rotation, gear spin, waterfall cascade, and theme cascade. Independent from the system-wide <em>prefers-reduced-motion</em>.</span>
+                </div>
+                <input type="checkbox" id="reduceMotionToggle" class="settings-switch" />
+              </div>
+            </div>
+
+            <!-- Note: "Mark all memories as seen" lived here under a
+                 Maintenance subsection until 2026-05-28. It moved to
+                 the Notifications pane since it's logically the bulk-
+                 dismiss for the bell's recently-updated entries — the
+                 user can now find both the suppress-updates toggle and
+                 the bulk-clear in one place. -->
+          </section>
+
+          <!-- ===== NOTIFICATIONS ===== -->
+          <section class="settings-pane hidden" data-settings-pane="notifications" role="tabpanel">
+            <header class="settings-pane-head">
+              <h3>Notifications</h3>
+              <p>Bell behavior, sound, and bulk-clear of the recently-updated marker.</p>
+            </header>
+
+            <div class="settings-card">
+              <div class="settings-card-row settings-card-row-toggle">
+                <div class="settings-card-row-text">
+                  <strong>Suppress update notifications</strong>
+                  <span>Hides drawer-update entries from the bell (<em>"Updated 5m ago"</em>). Failed-save errors still surface so you don't miss something that didn't persist.</span>
+                </div>
+                <input type="checkbox" id="suppressUpdatesToggle" class="settings-switch" />
+              </div>
+              <div class="settings-card-divider"></div>
+              <div class="settings-card-row settings-card-row-toggle">
+                <div class="settings-card-row-text">
+                  <strong>Notification sounds</strong>
+                  <span>Plays a brief two-tone chime when a new notification arrives. Synthesized locally — no audio file. Debounced to avoid back-to-back tones.</span>
+                </div>
+                <input type="checkbox" id="notificationSoundsToggle" class="settings-switch" />
+              </div>
+              <div class="settings-card-divider"></div>
+              <label class="settings-card-row settings-card-row-select">
+                <div class="settings-card-row-text">
+                  <strong>Refresh interval</strong>
+                  <span>How often the dashboard checks for new notifications from external MCP clients (Codex, other Claude sessions, sync tool). Shorter = feels more live, more Pi work. Paused while the tab is hidden either way.</span>
+                </div>
+                <select id="notificationPollIntervalSelect" class="settings-select-control">
+                  <option value="15">Every 15 seconds</option>
+                  <option value="30">Every 30 seconds</option>
+                  <option value="60">Every 60 seconds</option>
+                </select>
+              </label>
+              <div class="settings-card-divider"></div>
+              <div class="settings-card-row settings-card-row-action">
+                <div class="settings-card-row-text">
+                  <strong>Send test notification</strong>
+                  <span>Pushes a fake <em>Save failed</em> entry into the bell — the same red notification a real save/restore/delete error would show. Useful for previewing the error chime and confirming the notification surface works.</span>
+                </div>
+                <button type="button" id="sendTestNotifBtn" class="icon-button">Send</button>
+              </div>
+              <div class="settings-card-divider"></div>
+              <div class="settings-card-row settings-card-row-action">
+                <div class="settings-card-row-text">
+                  <strong>Mark all memories as seen</strong>
+                  <span>Clears the blue <em>recently-updated</em> marker from every memory across all wings in one click. Useful after a batch edit / mass sync / migration that bumped many cards at once. Storage is unaffected — this only updates your local <em>seen</em> map.</span>
+                </div>
+                <button type="button" id="markAllSeenSettingsBtn" class="icon-button">Clear</button>
+              </div>
+            </div>
+          </section>
+
+          <!-- ===== SHORTCUTS ===== -->
+          <section class="settings-pane hidden" data-settings-pane="shortcuts" role="tabpanel">
+            <header class="settings-pane-head">
+              <h3>Keyboard shortcuts</h3>
+              <p>Click a global binding to record a new key. Esc cancels recording. The editing-mode shortcuts below are universal conventions and are not remappable.</p>
+            </header>
+
+            <h4 class="settings-subsection-head">Global</h4>
+            <div class="settings-card">
+              <div class="settings-card-row settings-card-row-shortcut">
+                <div class="settings-card-row-text">
+                  <strong>Toggle maximize</strong>
+                  <span>Enlarges the panel under focus — Detail when a memory is open, Memories otherwise.</span>
+                </div>
+                <button type="button" class="settings-shortcut-key" data-shortcut="maximize" aria-label="Remap toggle-maximize shortcut">F</button>
+              </div>
+              <div class="settings-card-divider"></div>
+              <div class="settings-card-row settings-card-row-shortcut">
+                <div class="settings-card-row-text">
+                  <strong>Close overlay</strong>
+                  <span>Dismisses sheets, menus, and the detail panel — one layer per press. Esc also still works as a built-in fallback.</span>
+                </div>
+                <button type="button" class="settings-shortcut-key" data-shortcut="close" aria-label="Remap close shortcut">X</button>
+              </div>
+              <div class="settings-card-divider"></div>
+              <div class="settings-card-row settings-card-row-shortcut">
+                <div class="settings-card-row-text">
+                  <strong>Delete focused</strong>
+                  <span>Removes the focused wing/room or the open memory. Always routes through the trash — reversible.</span>
+                </div>
+                <button type="button" class="settings-shortcut-key" data-shortcut="delete" aria-label="Remap delete shortcut">Backspace</button>
+              </div>
+              <div class="settings-card-divider"></div>
+              <div class="settings-card-row settings-card-row-shortcut">
+                <div class="settings-card-row-text">
+                  <strong>Edit memory</strong>
+                  <span>Opens the inline editor for the currently-selected memory — same path as clicking the pencil button on the detail panel.</span>
+                </div>
+                <button type="button" class="settings-shortcut-key" data-shortcut="edit" aria-label="Remap edit shortcut">E</button>
+              </div>
+            </div>
+
+            <!-- Wrap h4+p in a single .settings-pane child so the
+                 pane's flex gap:18px doesn't open between them — they
+                 should read as title + subtitle, not as two separate
+                 paragraphs with a card-sized gap between. -->
+            <div class="settings-subsection-titlepair">
+              <h4 class="settings-subsection-head">Editing mode</h4>
+              <p class="settings-subsection-note">Inline-formatting shortcuts while editing a memory. Symbols below show Mac equivalents; on Windows / Linux the same combinations work with Ctrl.</p>
+            </div>
+            <div class="settings-card">
+              <div class="settings-card-row settings-card-row-shortcut">
+                <div class="settings-card-row-text">
+                  <strong>Bold</strong>
+                  <span>Wraps the selected text with <em>** **</em> in the underlying markdown source.</span>
+                </div>
+                <span class="settings-shortcut-key settings-shortcut-key-readonly" data-edit-shortcut="bold">⌘B</span>
+              </div>
+              <div class="settings-card-divider"></div>
+              <div class="settings-card-row settings-card-row-shortcut">
+                <div class="settings-card-row-text">
+                  <strong>Italic</strong>
+                  <span>Wraps the selected text with <em>* *</em>.</span>
+                </div>
+                <span class="settings-shortcut-key settings-shortcut-key-readonly" data-edit-shortcut="italic">⌘I</span>
+              </div>
+              <div class="settings-card-divider"></div>
+              <div class="settings-card-row settings-card-row-shortcut">
+                <div class="settings-card-row-text">
+                  <strong>Strikethrough</strong>
+                  <span>Wraps the selected text with <em>~~ ~~</em>.</span>
+                </div>
+                <span class="settings-shortcut-key settings-shortcut-key-readonly" data-edit-shortcut="strikethrough">⌘⇧X</span>
+              </div>
+              <div class="settings-card-divider"></div>
+              <div class="settings-card-row settings-card-row-shortcut">
+                <div class="settings-card-row-text">
+                  <strong>Inline code</strong>
+                  <span>Wraps the selected text with single backticks.</span>
+                </div>
+                <span class="settings-shortcut-key settings-shortcut-key-readonly" data-edit-shortcut="code">⌘E</span>
+              </div>
+            </div>
+          </section>
+
+          <!-- ===== TRASH ===== -->
+          <section class="settings-pane hidden" data-settings-pane="trash" role="tabpanel">
+            <header class="settings-pane-head">
+              <h3>Trash</h3>
+              <p>How long deleted memories stay in <em>Recently deleted</em> before they're permanently removed.</p>
+            </header>
+
+            <div class="settings-card">
+              <label class="settings-card-row settings-card-row-select">
+                <div class="settings-card-row-text">
+                  <strong>Auto-delete after</strong>
+                  <span>Snapshots older than this are pruned the next time the trash is opened. Off keeps everything until you clear the bin yourself.</span>
+                </div>
+                <select id="trashAutoDeleteSelect" class="settings-select-control">
+                  <option value="0">Off (keep forever)</option>
+                  <option value="1">24 hours</option>
+                  <option value="7">1 week</option>
+                  <option value="14">2 weeks</option>
+                  <option value="30">1 month</option>
+                </select>
+              </label>
+            </div>
+          </section>
+
+          <!-- ===== BACKUP ===== -->
+          <section class="settings-pane hidden" data-settings-pane="backup" role="tabpanel">
+            <header class="settings-pane-head">
+              <h3>Backup &amp; restore</h3>
+              <p>Download a JSON snapshot of every memory and fact, or merge one back in. Duplicates aren't re-imported.</p>
+            </header>
+
+            <div class="settings-card">
+              <button class="settings-action-row" id="exportBtn" type="button">
+                <div class="settings-card-row-text">
+                  <strong>Download memories</strong>
+                  <span>Exports every memory and fact as JSON — keep a local copy for safety.</span>
+                </div>
+                <svg class="settings-action-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 3v12" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+                  <path d="m7 10 5 5 5-5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+                  <path d="M5 19h14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+                </svg>
+              </button>
+              <div class="settings-card-divider"></div>
+              <button class="settings-action-row" id="importBtn" type="button">
+                <div class="settings-card-row-text">
+                  <strong>Restore from file</strong>
+                  <span>Merge a JSON snapshot back in. Existing items match by id and aren't duplicated.</span>
+                </div>
+                <svg class="settings-action-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 21V9" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+                  <path d="m7 14 5-5 5 5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+                  <path d="M5 5h14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+                </svg>
+              </button>
+              <input type="file" id="importInput" accept="application/json,.json" class="hidden" />
+            </div>
+            <div class="write-status settings-pane-status" id="exportStatus"></div>
+          </section>
+
+          <!-- ===== ACCOUNT ===== -->
+          <section class="settings-pane hidden" data-settings-pane="account" role="tabpanel">
+            <header class="settings-pane-head">
+              <h3>Account</h3>
+              <p id="settingsSubtitle">Set the credentials used to secure the dashboard.</p>
+            </header>
+
+            <!-- One credentials card — Username + the three password
+                 fields together. No subsection heads (the field count
+                 is too small to warrant section dividers), no per-row
+                 descriptions (the field labels are the description —
+                 "Current password" / "New password" / "Confirm password"
+                 say exactly what's needed). Helper text below the card
+                 covers the only non-obvious requirement: password
+                 minimum length. -->
+            <div class="settings-card">
+              <div class="settings-card-row settings-card-row-input">
+                <div class="settings-card-row-text">
+                  <strong>Username</strong>
+                </div>
+                <input id="settingsUsername" class="settings-input-control" required maxlength="64" autocomplete="username" />
+              </div>
+              <div class="settings-card-divider" data-current-divider></div>
+              <div class="settings-card-row settings-card-row-input hidden" id="settingsCurrentRow">
+                <div class="settings-card-row-text">
+                  <strong>Current password</strong>
+                </div>
+                <input id="settingsCurrentPassword" class="settings-input-control" type="password" autocomplete="current-password" />
+              </div>
+              <div class="settings-card-divider"></div>
+              <div class="settings-card-row settings-card-row-input">
+                <div class="settings-card-row-text">
+                  <strong>New password</strong>
+                </div>
+                <input id="settingsPassword" class="settings-input-control" type="password" minlength="8" required autocomplete="new-password" />
+              </div>
+              <div class="settings-card-divider"></div>
+              <div class="settings-card-row settings-card-row-input">
+                <div class="settings-card-row-text">
+                  <strong>Confirm password</strong>
+                </div>
+                <input id="settingsPasswordConfirm" class="settings-input-control" type="password" minlength="8" required autocomplete="new-password" />
+              </div>
+            </div>
+            <p class="settings-pane-helper">Password must be at least 8 characters.</p>
+            <small class="field-error hidden settings-pane-error" id="settingsMatchError">Passwords don't match.</small>
+
+            <!-- Bottom action bar: Sign out (danger pill, left) opposite
+                 Save credentials (primary CTA, right). Buttons are
+                 self-explanatory; no row/description chrome — the rest
+                 of the pane provides enough context. -->
+            <div class="settings-account-actions">
+              <button class="settings-sign-out" id="logoutBtn" type="button">Sign out</button>
+              <button class="primary-action" id="saveSettings" type="submit">Save credentials</button>
+            </div>
+
+            <div class="write-status settings-pane-status" id="settingsStatus"></div>
+          </section>
+
+          <!-- ===== ABOUT ===== -->
+          <section class="settings-pane hidden" data-settings-pane="about" role="tabpanel">
+            <header class="settings-pane-head">
+              <h3>About</h3>
+              <p>Project info, support, and feedback.</p>
+            </header>
+
+            <!-- Identity card: name + tagline + version. No actions —
+                 this is the "what is this thing" line of the pane. -->
+            <div class="settings-card">
+              <div class="settings-card-row settings-about-identity">
+                <div class="settings-about-brand">
+                  <img src="/apricity-logo.png?v=1" alt="" class="settings-about-logo" />
+                  <div class="settings-about-text">
+                    <strong>Apricity</strong>
+                    <span>MemPalace Companion · Successor of <em>MemPalace Dashboard</em>.</span>
+                  </div>
+                </div>
+                <div class="settings-about-version-group">
+                  <span class="settings-version-badge" id="aboutVersion" title="Installed version">v…</span>
+                  <a class="settings-version-update hidden" id="aboutUpdate" href="https://github.com/epinethrone/mempalace-frontend/releases" target="_blank" rel="noopener noreferrer" title="A newer version is available">
+                    <svg viewBox="0 0 16 16" aria-hidden="true">
+                      <path d="M8 13V3M3 7l5-4 5 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                    <span id="aboutUpdateVersion"></span>
+                  </a>
+                </div>
+              </div>
+            </div>
+
+            <!-- External links — minimal, clearly outbound. Arrow-up-
+                 right icon is the universal "opens externally"
+                 affordance; the heart/bug icons earlier were too
+                 decorative for what are really just two links. -->
+            <div class="settings-card">
+              <a class="settings-action-row settings-action-link" href="https://buymeacoffee.com/zhiar" target="_blank" rel="noopener noreferrer">
+                <div class="settings-card-row-text">
+                  <strong>Support development</strong>
+                  <span>If Apricity is useful to you, buying a coffee helps keep the project moving.</span>
+                </div>
+                <svg class="settings-action-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 21s-7-4.5-7-10a4.2 4.2 0 0 1 7-3.1A4.2 4.2 0 0 1 19 11c0 5.5-7 10-7 10z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+                </svg>
+              </a>
+              <div class="settings-card-divider"></div>
+              <a class="settings-action-row settings-action-link" href="https://github.com/epinethrone/mempalace-frontend/issues" target="_blank" rel="noopener noreferrer">
+                <div class="settings-card-row-text">
+                  <strong>Report a bug</strong>
+                  <span>Found something broken or have a feature idea? File it on GitHub.</span>
+                </div>
+                <svg class="settings-action-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <ellipse cx="12" cy="13" rx="5" ry="6" fill="none" stroke="currentColor" stroke-width="1.6"/>
+                  <path d="M9 8.5 7.5 7M15 8.5 16.5 7M4 13h3M17 13h3M5.5 18.5 8 17M18.5 18.5 16 17M12 7V4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+                </svg>
+              </a>
+            </div>
+          </section>
+
+        </main>
       </form>
+      <!-- Floating close pill — sibling of the shell INSIDE the shell-
+           wrap so it can escape the shell's overflow:hidden clipping
+           AND anchor against the shell's exact corner. The shell-wrap
+           is sized to the shell's intrinsic width (since shell is its
+           only block child), so position:absolute right:-10px lands
+           10px past the shell's right edge — not the wider overlay's
+           right edge. Mirrors .detail-panel-actions on the Detail panel
+           pattern: white capsule (dark in dark mode), soft drop shadow,
+           single 22px red traffic-light circle inside. -->
+      <div class="settings-shell-actions">
+        <button class="settings-shell-close" id="settingsClose" type="button" aria-label="Close settings" title="Close">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="m6 6 12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>
+          </svg>
+        </button>
+      </div>
+      </div>
+      <!-- Muted dismissal hint — sits just below the shell inside
+           the frame wrapper so it stays anchored to the box bottom
+           regardless of viewport height. Two ways to close: click
+           the backdrop or press X (the user-remappable Close
+           shortcut, default `x`). -->
+      <p class="settings-overlay-hint" aria-hidden="true">
+        Click anywhere outside or press <kbd>X</kbd> to close
+      </p>
+      </div>
     </section>
 
     <section class="write-sheet hidden" id="factSheet" aria-label="Add fact">
@@ -468,7 +1291,11 @@
             <h2 id="factSheetTitle">Add fact</h2>
             <p>Subject → predicate → object. Source drawer is optional.</p>
           </div>
-          <button class="icon-button" id="factClose" type="button">Close</button>
+          <button class="icon-button icon-only sheet-close" id="factClose" type="button" aria-label="Close add fact" title="Close">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m6 6 12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+            </svg>
+          </button>
         </div>
         <label><span>Subject</span><input id="factSubject" required maxlength="200" autocomplete="off" /></label>
         <label><span>Predicate</span><input id="factPredicate" required maxlength="200" autocomplete="off" /></label>
@@ -490,7 +1317,11 @@
             <h2>Tools</h2>
             <p>Writes, destructive ops, and advanced queries. Browsing has moved inline — rooms now show their tunnels as chips and the diary lives as its own wing.</p>
           </div>
-          <button class="icon-button" id="labClose" type="button">Close</button>
+          <button class="icon-button icon-only sheet-close" id="labClose" type="button" aria-label="Close tools" title="Close">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m6 6 12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+            </svg>
+          </button>
         </div>
         <div class="lab-tabs" role="tablist" aria-label="Tools sections">
           <button class="lab-tab active" type="button" data-lab-tab="kg" role="tab" aria-selected="true">Knowledge Graph</button>
@@ -677,7 +1508,12 @@
     </section>
 
 
-    <script src="/app.js?v=51"></script>
-    <script src="/lab.js?v=3"></script>
+    <!-- defer: let the parser finish + paint the cached HTML/CSS
+         (top bar + empty panel frames) before executing the ~440KB
+         app.js. Order is preserved (app.js before lab.js) and all
+         event handlers attach inside the scripts, so deferring is
+         safe. Shaves the JS-execution stall off the first paint. -->
+    <script src="/app.js?v=264" defer></script>
+    <script src="/lab.js?v=4" defer></script>
   </body>
 </html>

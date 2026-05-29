@@ -17,8 +17,14 @@
     document.body.classList.add("lab-open");
   }
   function closeLab() {
-    sheet.classList.add("hidden");
-    document.body.classList.remove("lab-open");
+    // Same pop-out exit animation as the rest of the sheets. dismissSheet
+    // is defined on the global app.js scope; lab.js is loaded after.
+    if (typeof window.dismissSheet === "function") {
+      window.dismissSheet(sheet, () => document.body.classList.remove("lab-open"));
+    } else {
+      sheet.classList.add("hidden");
+      document.body.classList.remove("lab-open");
+    }
   }
   openBtn.addEventListener("click", openLab);
   closeBtn && closeBtn.addEventListener("click", closeLab);

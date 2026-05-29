@@ -6,7 +6,50 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
-_No unreleased changes._
+Work layered on top of the 0.6.0 baseline (the dated 0.6.0 entry below
+documents the earlier tunnel-inspector design, since superseded). This
+batch is the "Apricity" baseline pushed as a known-good recovery point.
+
+### Added
+- **Apricity rebrand.** App is now "Apricity — MemPalace Companion": logo in the top bar, favicon set regenerated from the Apricity mark, official lobe-icons model SVGs (Claude/Codex/Gemini/Grok) under `static/icons/`.
+- **Wikilink + hyperlink back-navigation.** Following a `[[drawer_id|Title]]` link to another memory pushes a nav stack; a `← Back to previous memory` bar pops it. Supports arbitrary depth and restores scroll position.
+- **localStorage palace cache (stale-while-revalidate).** Reloads paint memories instantly from the last cached payload, then reconcile against the live fetch. A dedicated `apricity-seen-cache-v1` key keeps notification-dismissal state from flashing back on refresh.
+- **Server gzip + serve-time JS minify.** `server.py` gzips text responses ≥1KB and minifies `app.js` on demand via `terser`/`esbuild` (cached by mtime, graceful raw fallback). app.js 441KB → 175KB minified → ~45KB gzipped on the wire.
+- **Notification bell overhaul.** Suppress toggle, synthesized success/error sounds (Web Audio, unlock-on-gesture), configurable poll interval (15/30/60s), retry buttons for failed saves, test affordance, LAN-wide shared seen-state via `dashboard-seen.json`.
+- **Optimistic edit/delete/restore** with revert-on-failure + failed-save notification, retry button, and a red `.is-failed` card tint.
+
+### Changed
+- **Tunnel detail redesign.** Endpoint cards stack vertically with a graph-edge connector; "Open memory" moved to a compact header link rendered only for drawer-bound endpoints.
+- **Tunnel-bind indicator.** Replaced the cramped "TUNNELS" meta cell with a floating chip (linked-memory title + glyph, opens the linked memory) plus a low-opacity graph-edge watermark in the meta strip; edit mode adds an inline unbind ×.
+- **Versioned static assets cached `immutable`**; HTML + API stay `no-store`. Fixes the blank-content flash on every refresh.
+- **Reload polish.** Pre-paint priming of pane widths / theme / grid layout from a synchronous `<head>` script + deferred app.js IIFE, eliminating logo, Tools-button, search-box, panel-header, theme-icon, and detail-meta flicker/shift on reload.
+
+### Fixed
+- Numerous reload layout-shift / flash regressions (search box left-snap, panel-header count shift, theme icon pop-in, detail meta-strip grey-band flicker, wrong slide-direction on first post-reload nav).
+- `loadTunnels` no longer self-recurses; boot fetches (session/preferences/palace/tunnels) run in parallel instead of serially.
+- Mobile: panel controls reachable on touch (no-hover) devices.
+
+## [0.6.0] — 2026-05-26
+
+### Added
+- **Resizable panes.** Drag handles between sidebar/main, rooms/drawers, and drawers/detail let you resize each pane to taste. Widths persist across reloads via localStorage (one key per pane: `mempalace-pane--sidebar-w`, `mempalace-pane--rooms-w`, `mempalace-pane--drawers-w`). Each width is clamped to safe bounds (sidebar 200–520, rooms 200–600, drawers 280–900px). **Double-click** a resizer to reset that pane to default. **Arrow keys** when a resizer is focused nudge ±16px (or ±64px with Shift held). Hit target is 14px wide; there's no visible divider line — the `col-resize` cursor on hover is the only affordance, which keeps the chrome quiet between adjacent panels.
+- **Layout fallback.** New `.shell.resizable` and `.content-grid.resizable` CSS classes mean the resizable grid template only takes effect once JS has injected the handles. If app.js fails to load, the dashboard falls back to the original responsive layout instead of breaking.
+- **Detail-panel tunnel jump.** Whenever the selected memory's room has at least one tunnel, the metadata header gains a tunnel-glyph button to the left of `Copy ID`. Tap it to jump to the other end — to the bound drawer if the tunnel was created with one, otherwise to the first drawer in the target room.
+- **In-pane "Open memory" navigation with iOS-style slide.** Clicking `Open memory` on a drawer-bound endpoint card now pushes the drawer into the same right pane (instead of changing wing/room/drawer selection in the other panes). A chevron-and-label `← Back to tunnel` sits above the metadata block; tap it to pop back to the tunnel inspector. Forward transitions slide the new content in from the right; back transitions slide it in from the left. Easing curve `cubic-bezier(0.32, 0.72, 0, 1)` to match UIKit's default push/pop. Honors `prefers-reduced-motion: reduce`. `Open room` on unbound endpoints still navigates the whole UI.
+- **Standardized delete + tunnel trash recovery.** Tunnel deletion now flows through the same confirmation sheet memories/rooms/wings use (`openDeleteSheet` + `confirmDelete`), with the same trash-can icon as draft deletion. `data-delete-scope="tunnel"` plus the existing document-level `[data-delete-scope]` dispatcher routes one click to the standard prompt. Server-side, `delete_tunnel_endpoint` already snapshots the tunnel into `VERSIONS_LOG` before deletion (using `log_tunnel_version` with `kind: "tunnel"`); the snapshot now appears in **Recently deleted** alongside drawer snapshots. **Restore from trash** brings the tunnel back exactly as stored — same id (canonical from endpoints), label, and any drawer bindings. The trash UI renders tunnel rows differently from drawer rows (route in the title slot, optional label preview below the meta line).
+- **Tunnel inspector in the right pane.** Tapping a tunnel entry inside a room-row expansion now opens a graphical tunnel-detail view in the detail panel instead of navigating away. The view stacks: an accented "Tunnel" eyebrow with the tunnel id and Copy ID; two endpoint cards joined by a dashed arrow (`From` / `To`, wing + room + memory count, or the bound memory's title when the tunnel has a `source_drawer_id` / `target_drawer_id`); the tunnel label rendered as the body (with an italic fallback when no label was set); a metadata footer (created, kind); and a `Delete tunnel` action that calls `/api/tunnels/delete` and refreshes the cache. Endpoint cards have `Open room` / `Open memory` buttons that clear the tunnel selection and navigate the rest of the UI to that endpoint. The tunnel id is persisted in the URL hash as `t=…` so deep-links and refreshes restore the view. A container query (`@container (max-width: 520px)`) auto-stacks the endpoint cards vertically when the detail pane is dragged narrow, so neither card truncates aggressively. The entry box that opened the inspector is highlighted in the room expansion via a new `.room-tunnel-link.active` style so users can see which tunnel maps to the open view.
+
+### Changed
+- **Tunnel indicator is now a pure visual badge.** The room-row icon no longer has its own click target or per-row expansion panel. Whenever a room with tunnels is selected and no specific memory is chosen, the right pane automatically renders the tunnel inspector for the first tunnel — which makes the icon read as "open this room to see its tunnel info on the right" instead of "expand for a list". This removes one click and an entire UI surface (the inline expansion + per-tunnel entry boxes from 0.5.0) now that the inspector is the canonical place tunnel data lives. Rooms with multiple tunnels show the first; navigate via the inspector's `Swap direction` / endpoint cards to reach the others.
+- **Wing counts zero-padded to two digits.** Single-digit counts now render as `01`, `02`, `03` so wing rows stay vertically aligned at a glance. Same rule applies to the All-rooms / per-room counts in the rooms panel. Counts ≥100 still take their natural width.
+- **Wing-row tunnel chip removed.** The accent-color pill that showed the cross-wing tunnel count next to each wing was visually loud and broke the same count-column symmetry the icon refactor fixes for rooms; cross-wing context is still available from the Tools → Tunnels pane.
+- `.shell` grid base template stays at the old `280px 1fr` until `initResizers()` adds the `.resizable` class.
+- `.content-grid` similar: stays at the old `minmax(200px, 0.55fr) minmax(320px, 0.95fr) minmax(380px, 1.5fr)` with 16px gap until `.resizable` flips it to fixed-px columns with the resizer tracks.
+
+### Removed
+- `.wing-tunnel-chip`, `.nav-item-meta`, `.room-tunnel-chip`, `.room-tunnel-add` styles and the wing-chip render path in `renderNav`. `state.tunnelsByWing` is gone.
+- **Room-row tunnel expansion.** `.room-tunnel-list`, `.room-tunnel-link*`, `.room-row.tunnel-open .room-item`, and `@keyframes tunnel-expand` are all out, along with `state.expandedTunnelRooms` and the icon's click/keyboard handlers. The tunnel inspector replaces this surface entirely.
+- `state.selectedTunnelId` and the `t=…` URL-hash key. Tunnel selection is now derived from `selectedWing` + `selectedRoom` instead of being its own state.
 
 ## [0.5.1] — 2026-05-26
 
@@ -143,7 +186,8 @@ _No unreleased changes._
 - URL state for current wing / room / drawer / query / sort.
 - Keyboard shortcuts (`⌘K`, `Esc`, `R`).
 
-[Unreleased]: https://github.com/epinethrone/mempalace-frontend/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/epinethrone/mempalace-frontend/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/epinethrone/mempalace-frontend/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/epinethrone/mempalace-frontend/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/epinethrone/mempalace-frontend/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/epinethrone/mempalace-frontend/compare/v0.4.1...v0.4.2

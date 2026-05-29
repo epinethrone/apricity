@@ -2,15 +2,20 @@
 from __future__ import annotations
 
 import base64
+import gzip
 import hashlib
+import importlib.metadata
 import json
 import os
 import platform
 import re
 import secrets
+import shutil
 import sqlite3
 import subprocess
 import sys
+import time
+import urllib.request
 from collections import Counter
 from datetime import datetime, timedelta
 from http.cookies import SimpleCookie
@@ -23,6 +28,75 @@ SERVER_STARTED_AT = datetime.now()
 
 
 ROOT = Path(__file__).resolve().parent
+STATIC_DIR = ROOT / "static"
+
+# ---- serve-time JS minification (optional, graceful) -----------------------
+# app.js is ~440KB of readable source; minified it's ~175KB, which cuts the
+# browser's PARSE time (the dominant cold-load cost once assets are cached).
+# Rather than a build step (which would break the edit→cp→refresh live-iterate
+# workflow), we minify ON DEMAND the first time a .js file is requested after
+# it changes, then cache the result in-memory keyed by the file's mtime+size.
+# Subsequent requests serve the cached minified bytes with zero work.
+#
+# This is the one place the dashboard shells out to a non-stdlib tool (terser
+# / esbuild, whichever is on PATH). It degrades gracefully: if no minifier is
+# found, or minification errors/times out, we fall back to the raw file bytes,
+# so the "zero-dependency Python stdlib server" promise still holds when the
+# optional tool is absent. Set MEMPALACE_NO_MINIFY=1 to force raw always.
+_MINIFY_CACHE: dict[str, tuple[float, int, bytes]] = {}
+_MINIFIER_CMD: list[str] | None = None
+_MINIFIER_PROBED = False
+
+
+def _find_minifier() -> list[str] | None:
+    """Locate a JS minifier on PATH once. Prefer terser, then esbuild.
+    Returns the base argv (reads stdin, writes stdout) or None."""
+    global _MINIFIER_CMD, _MINIFIER_PROBED
+    if _MINIFIER_PROBED:
+        return _MINIFIER_CMD
+    _MINIFIER_PROBED = True
+    if os.environ.get("MEMPALACE_NO_MINIFY"):
+        _MINIFIER_CMD = None
+        return None
+    terser = shutil.which("terser")
+    if terser:
+        # -c compress, -m mangle; reads stdin, writes stdout by default.
+        _MINIFIER_CMD = [terser, "-c", "-m"]
+        return _MINIFIER_CMD
+    esbuild = shutil.which("esbuild")
+    if esbuild:
+        _MINIFIER_CMD = [esbuild, "--minify", "--loader=js"]
+        return _MINIFIER_CMD
+    _MINIFIER_CMD = None
+    return None
+
+
+def get_minified_js(path: Path) -> bytes:
+    """Return minified bytes for a .js file, cached by (mtime, size).
+    Falls back to the raw bytes if no minifier is available or it fails."""
+    raw = path.read_bytes()
+    cmd = _find_minifier()
+    if not cmd:
+        return raw
+    try:
+        st = path.stat()
+        key = str(path)
+        cached = _MINIFY_CACHE.get(key)
+        if cached and cached[0] == st.st_mtime and cached[1] == st.st_size:
+            return cached[2]
+        proc = subprocess.run(
+            cmd, input=raw, capture_output=True, timeout=30, check=True,
+        )
+        out = proc.stdout
+        # Sanity: a successful minify should produce non-empty output that's
+        # no larger than the source. If something's off, keep the raw file.
+        if not out or len(out) > len(raw):
+            return raw
+        _MINIFY_CACHE[key] = (st.st_mtime, st.st_size, out)
+        return out
+    except (subprocess.SubprocessError, OSError):
+        return raw
+
 
 # All filesystem locations default to the standard MemPalace home (~/.mempalace) but
 # can be overridden per-deployment with environment variables.
@@ -36,8 +110,123 @@ KG_DB = _env_path("MEMPALACE_KG_DB", MEMPALACE_HOME / "knowledge_graph.sqlite3")
 INBOX_DIR = _env_path("MEMPALACE_INBOX", MEMPALACE_HOME / "dashboard-inbox")
 ARCHIVE_DIR = INBOX_DIR / "filed"
 VERSIONS_LOG = _env_path("MEMPALACE_VERSIONS", MEMPALACE_HOME / "dashboard-versions.jsonl")
+# MemPalace's own write-ahead log — records every mutation including
+# MCP-initiated ones (Codex calling mempalace_update_drawer, Claude in
+# another session, sync tool, etc.). The dashboard's own VERSIONS_LOG
+# only sees mutations routed through dashboard /api endpoints, so
+# without consulting the MP WAL the "Updated Xh ago" indicator never
+# refreshes for off-dashboard writes. See enrich_drawers_with_updated_at.
+MP_WAL_LOG = _env_path("MEMPALACE_WAL_LOG", MEMPALACE_HOME / "wal" / "write_log.jsonl")
+# One-line-per-restore ledger. When the dashboard restores a deleted
+# drawer it calls tool_add_drawer, which appends an `add_drawer` entry
+# to the MP WAL with the current timestamp — so the WAL-derived
+# updated_at for the restored drawer is the restore time, not its
+# original last-edit time. We preserve the original filed_at via direct
+# SQL (see restore_version) but had no way to override the WAL-derived
+# updated_at, which made the bell pulse + "Updated · just now" badge
+# fire on every restore as if someone had just edited the memory.
+# Recording the new drawer_id here lets enrich_drawers_with_updated_at
+# clamp updated_at = filed_at for restored drawers, which is honest:
+# nothing was edited, just recovered. Plain text so it survives a
+# server restart without re-bumping every previously-restored drawer.
+RESTORED_DRAWERS_LOG = _env_path(
+    "MEMPALACE_RESTORED_DRAWERS",
+    MEMPALACE_HOME / "dashboard-restored-drawers.jsonl",
+)
+# Shared seen-state map — drawer_id → ISO timestamp of when ANY client
+# on this Pi last marked the drawer as seen. Lives server-side (not in
+# each browser's localStorage) so the bell-cleared state syncs across
+# every browser/device hitting this dashboard on the LAN. Single JSON
+# object, rewritten atomically on each update. The file is small even
+# for thousands of drawers (one short key+value per entry) so a full
+# rewrite is cheaper than tracking diffs.
+SEEN_FILE = _env_path(
+    "MEMPALACE_SEEN",
+    MEMPALACE_HOME / "dashboard-seen.json",
+)
 CREDENTIALS_FILE = _env_path("MEMPALACE_CREDENTIALS", MEMPALACE_HOME / "dashboard-credentials.json")
 SESSIONS_FILE = _env_path("MEMPALACE_SESSIONS", MEMPALACE_HOME / "dashboard-sessions.json")
+PREFERENCES_FILE = _env_path("MEMPALACE_PREFERENCES", MEMPALACE_HOME / "dashboard-preferences.json")
+
+# ---------- version tracking ----------
+# Source of truth for the displayed version is the INSTALLED package
+# metadata — never a hardcoded string in the UI. Reading via
+# importlib.metadata means the About pane automatically reflects
+# whatever pyproject.toml says when the package was built, which
+# updates whenever the user runs `pipx upgrade mempalace-dashboard`.
+# No manual HTML edit per release.
+#
+# Latest-available comparison goes one step further: we fetch the
+# GitHub releases API (cached 30 minutes per process so we stay well
+# under the 60/hr unauthenticated rate limit), and the dashboard
+# shows an "update available" affordance when latest > installed.
+_VERSION_INSTALLED: str | None = None
+_GITHUB_LATEST_CACHE: dict = {"version": None, "fetched_at": 0.0}
+_GITHUB_LATEST_TTL = 1800  # 30 minutes
+_GITHUB_LATEST_BACKOFF = 60  # On failure, wait this long before retrying
+_GITHUB_LATEST_URL = (
+    "https://api.github.com/repos/epinethrone/mempalace-frontend/releases/latest"
+)
+
+
+def get_installed_version() -> str:
+    """Return the installed mempalace-dashboard package version, or
+    'unknown' if metadata isn't available (running from a non-
+    installed checkout, etc.). Cached for the life of the process —
+    a different installed version means a different Python process."""
+    global _VERSION_INSTALLED
+    if _VERSION_INSTALLED is None:
+        try:
+            _VERSION_INSTALLED = importlib.metadata.version("mempalace-dashboard")
+        except importlib.metadata.PackageNotFoundError:
+            _VERSION_INSTALLED = "unknown"
+    return _VERSION_INSTALLED
+
+
+def get_latest_github_version() -> str | None:
+    """Fetch the most recent release tag from the project repo on
+    GitHub. Cached 30 minutes per process; on failure (network,
+    rate-limit, no releases yet, repo renamed), returns whatever
+    previous value we have — possibly None — and sets a short
+    backoff so we don't hammer GitHub on the next request."""
+    now = time.time()
+    cached_age = now - _GITHUB_LATEST_CACHE["fetched_at"]
+    if _GITHUB_LATEST_CACHE["version"] is not None and cached_age < _GITHUB_LATEST_TTL:
+        return _GITHUB_LATEST_CACHE["version"]
+    try:
+        req = urllib.request.Request(
+            _GITHUB_LATEST_URL,
+            headers={
+                "User-Agent": "Apricity-dashboard",
+                "Accept": "application/vnd.github+json",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        tag = (data.get("tag_name") or "").strip()
+        # Strip leading "v" so the value parallels what importlib.metadata
+        # returns ("0.6.0" not "v0.6.0") — makes the JS comparison cleaner.
+        normalized = tag.lstrip("v") if tag else None
+        _GITHUB_LATEST_CACHE["version"] = normalized
+        _GITHUB_LATEST_CACHE["fetched_at"] = now
+        return normalized
+    except Exception:
+        # Pretend the cache is fresh-ish so the next request waits
+        # GITHUB_LATEST_BACKOFF seconds, not immediately re-tries.
+        _GITHUB_LATEST_CACHE["fetched_at"] = now - _GITHUB_LATEST_TTL + _GITHUB_LATEST_BACKOFF
+        return _GITHUB_LATEST_CACHE["version"]
+
+
+def get_version_info() -> dict:
+    """Combined payload for the /api/version endpoint — installed
+    version always present; latest_github may be null if we couldn't
+    reach GitHub (the client treats null as 'unknown', NOT as 'no
+    update available')."""
+    return {
+        "installed": get_installed_version(),
+        "latest_github": get_latest_github_version(),
+        "releases_url": "https://github.com/epinethrone/mempalace-frontend/releases",
+    }
 SESSION_COOKIE = "mempalace_session"
 SESSION_DURATION_SHORT = timedelta(hours=12)
 SESSION_DURATION_LONG = timedelta(days=30)
@@ -61,6 +250,13 @@ def save_sessions(sessions: dict) -> None:
     SESSIONS_FILE.parent.mkdir(parents=True, exist_ok=True)
     SESSIONS_FILE.write_text(json.dumps(sessions, ensure_ascii=False), encoding="utf-8")
     try:
+        # 0o600 keeps the session-token file owner-readable only —
+        # important since these tokens grant full dashboard access if
+        # exfiltrated. The bare-except is for filesystems that don't
+        # implement POSIX permissions (FAT32, exFAT, some NAS mounts);
+        # the dashboard targets a Pi running ext4, so this is belt-
+        # and-suspenders. Failing silently is the right move there —
+        # the file STILL gets written, just at whatever umask permits.
         SESSIONS_FILE.chmod(0o600)
     except OSError:
         pass
@@ -167,6 +363,11 @@ def save_credentials(username: str, password_hash: str) -> None:
     payload = json.dumps({"username": username, "password_hash": password_hash}, ensure_ascii=False)
     CREDENTIALS_FILE.write_text(payload, encoding="utf-8")
     try:
+        # 0o600 — same reasoning as the sessions-file chmod (see
+        # save_sessions). The credentials file stores the bcrypt hash
+        # of the dashboard password; locking it owner-only stops other
+        # users on the same machine from offline-cracking it. Silent
+        # OSError fallback is for non-POSIX filesystems.
         CREDENTIALS_FILE.chmod(0o600)
     except OSError:
         pass
@@ -186,7 +387,7 @@ def _file_size(path: Path) -> int:
         return 0
 
 
-def import_palace(payload: dict) -> dict:
+def import_palace(payload: dict, actor: str = "User") -> dict:
     """Restore drawers + facts from a mempalace-export payload, deduping by content."""
     data = payload.get("data") if isinstance(payload, dict) else None
     if not isinstance(data, dict):
@@ -228,11 +429,15 @@ def import_palace(payload: dict) -> dict:
             skipped_drawers += 1
             continue
         try:
+            # JSON bulk-restore via dashboard → source="Import", actor =
+            # the authenticated dashboard user (e.g. "zhiar"), not generic
+            # "User". The session captured `actor` in the request handler.
             mempalace_add_drawer(
                 wing=wing,
                 room=room,
                 content=content,
-                source_file=f"mempalace-import:{timestamp}",
+                source_file="Import",
+                added_by=actor,
             )
             seen_drawer_keys.add(key)
             added_drawers += 1
@@ -454,7 +659,305 @@ def read_drawers() -> list[dict]:
 
     for item in by_id.values():
         item["etag"] = content_etag(item.get("content", ""))
-    return list(by_id.values())
+    drawers = list(by_id.values())
+    enrich_drawers_with_updated_at(drawers)
+    return drawers
+
+
+# ----- updated_at log cache -----
+# Caches the parsed latest_by_id dict + per-log read offset so the
+# /api/palace hot path doesn't re-parse both append-only log files on
+# every request. The previous implementation walked every line of
+# dashboard-versions.jsonl + wal/write_log.jsonl on each request —
+# O(total mutations ever) work for a signal most pages only need to
+# refresh when a write happens. With this cache, the steady-state cost
+# is one stat() per log per request (cheap, page-cached by the OS) and
+# only the BYTES APPENDED since last read get parsed. After a write the
+# tail-read parses a handful of new lines; the first request after a
+# log truncation/rotation falls back to a full re-read.
+#
+# Layout: {log_path: {"offset": int, "mtime": float, "size": int}}
+# - offset:  byte position we've already parsed up to
+# - mtime/size: tripwire — if either is smaller than the cached value,
+#   the log was truncated/rotated/replaced and we must restart from 0
+# Module-level so it survives across requests, NOT per-instance.
+_UPDATED_AT_CACHE = {
+    "by_id": {},                # drawer_id -> latest ISO ts seen across both logs
+    "sources": {},              # one entry per log path, shape above
+}
+
+# Module-level set of every drawer_id ever recovered from the trash
+# (lazily loaded from RESTORED_DRAWERS_LOG on first read). enrich_drawers
+# _with_updated_at consults this to clamp updated_at = filed_at on
+# restored drawers so the bell + Updated badge don't misfire — a restore
+# is recovery, not an edit, and the UI signals shouldn't pretend it was.
+_RESTORED_DRAWER_IDS: set[str] = set()
+_RESTORED_DRAWER_IDS_LOADED = False
+
+
+def _load_restored_drawer_ids() -> None:
+    """Read RESTORED_DRAWERS_LOG once per process and seed the in-memory
+    set. Each line is JSON: {"drawer_id": "...", "restored_at": "..."}.
+    Idempotent — guarded by _RESTORED_DRAWER_IDS_LOADED so callers can
+    re-invoke without re-parsing. Missing or malformed file is fine; an
+    empty set means no clamping happens, same as if no restores ever
+    occurred."""
+    global _RESTORED_DRAWER_IDS_LOADED
+    if _RESTORED_DRAWER_IDS_LOADED:
+        return
+    _RESTORED_DRAWER_IDS_LOADED = True
+    if not RESTORED_DRAWERS_LOG.exists():
+        return
+    try:
+        for line in RESTORED_DRAWERS_LOG.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            drawer_id = str(record.get("drawer_id") or "").strip()
+            if drawer_id:
+                _RESTORED_DRAWER_IDS.add(drawer_id)
+    except OSError:
+        # Log file unreadable — fall back to empty set. enrich just
+        # won't clamp anything, no functional break.
+        pass
+
+
+def _record_restored_drawer(drawer_id: str) -> None:
+    """Append one restore record to RESTORED_DRAWERS_LOG and update the
+    in-memory set. Called from restore_version after a successful add.
+    Best-effort write — a disk failure means the next enrich won't
+    clamp updated_at for this drawer (bell may pulse once), but the
+    restore itself succeeded so we don't propagate the error."""
+    if not drawer_id:
+        return
+    _load_restored_drawer_ids()
+    _RESTORED_DRAWER_IDS.add(drawer_id)
+    record = {
+        "drawer_id": drawer_id,
+        "restored_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    try:
+        RESTORED_DRAWERS_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with RESTORED_DRAWERS_LOG.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except OSError:
+        # In-memory set was already updated, so the current process
+        # will still clamp this drawer. Persistence loss only matters
+        # if the process restarts; even then, after RECENT_UPDATE_MS
+        # (24h) the freshness window expires and the bell won't pulse
+        # for this drawer anyway.
+        pass
+
+
+# ---------- shared seen-state map ----------
+# Map of drawer_id → ISO seen-at timestamp. Single source of truth for
+# "which notifications has the user dismissed" across every browser/
+# device hitting this Pi dashboard. Loaded lazily on first access;
+# rewritten atomically on every mark-seen so concurrent multi-client
+# writes don't corrupt the file (last write wins, which is fine — the
+# semantic is "any client marking this drawer seen is enough").
+_SEEN_CACHE: dict | None = None
+
+
+def load_seen_map() -> dict[str, str]:
+    """Return the current seen-state dict. Lazy-loads from SEEN_FILE on
+    first call, then memoizes. Subsequent calls return the cached dict
+    (mutations via mark_drawers_seen flush to disk and update the
+    cache in lockstep). Missing file / parse error → empty map."""
+    global _SEEN_CACHE
+    if _SEEN_CACHE is not None:
+        return _SEEN_CACHE
+    _SEEN_CACHE = {}
+    if not SEEN_FILE.exists():
+        return _SEEN_CACHE
+    try:
+        raw = SEEN_FILE.read_text(encoding="utf-8")
+        data = json.loads(raw)
+        if isinstance(data, dict):
+            # Keep only string→string entries — defensive against a
+            # manually-edited file that picked up non-conforming values.
+            for k, v in data.items():
+                if isinstance(k, str) and isinstance(v, str):
+                    _SEEN_CACHE[k] = v
+    except (OSError, ValueError):
+        pass
+    return _SEEN_CACHE
+
+
+def mark_drawers_seen(drawer_ids: list[str], seen_at: str | None = None) -> dict[str, str]:
+    """Stamp each id in `drawer_ids` with `seen_at` (or now) in the
+    shared map and persist to disk. Returns the updated map. Caller
+    is expected to filter to non-empty string ids — we defensively
+    skip blanks just in case."""
+    if seen_at is None:
+        seen_at = datetime.now().isoformat(timespec="seconds")
+    current = load_seen_map()
+    changed = False
+    for did in drawer_ids:
+        if isinstance(did, str) and did.strip():
+            current[did] = seen_at
+            changed = True
+    if changed:
+        try:
+            SEEN_FILE.parent.mkdir(parents=True, exist_ok=True)
+            tmp = SEEN_FILE.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(current, ensure_ascii=False), encoding="utf-8")
+            tmp.replace(SEEN_FILE)
+        except OSError:
+            # Disk write failed — the in-memory cache is still updated
+            # so THIS process treats the drawers as seen, but other
+            # clients won't pick up the change. Acceptable degradation.
+            pass
+    return current
+
+
+def _ingest_updated_at_log_tail(
+    log_path: Path,
+    handler,                    # (record: dict, _bump) -> None
+) -> None:
+    """Read NEW lines appended to ``log_path`` since the last call and
+    feed each JSON-decoded record to ``handler``. The handler is
+    expected to call ``_bump(drawer_id, ts)`` for any entry that
+    represents a content-changing mutation. Truncation / size-shrink /
+    mtime-rewind force a full restart from offset 0 (handles log
+    rotation, manual edits, or the file being recreated).
+    """
+    src = _UPDATED_AT_CACHE["sources"].setdefault(
+        str(log_path), {"offset": 0, "mtime": 0.0, "size": 0},
+    )
+    if not log_path.exists():
+        # File gone since last read → drop our offset so a freshly
+        # recreated log gets parsed from the top next time.
+        src["offset"] = 0
+        src["mtime"] = 0.0
+        src["size"] = 0
+        return
+    try:
+        st = log_path.stat()
+    except OSError:
+        return
+    # Tripwire: if the file shrank or its mtime went backwards, the log
+    # was truncated/replaced. Restart from offset 0 so we don't skip
+    # over freshly-written lines that landed before our cached cursor.
+    if st.st_size < src["offset"] or st.st_mtime < src["mtime"]:
+        src["offset"] = 0
+    if st.st_size == src["offset"] and st.st_mtime == src["mtime"]:
+        # Nothing changed since last call — the cached by_id dict
+        # already reflects everything in the file.
+        return
+    try:
+        # errors="replace" matches the original full-read path so any
+        # latin-1 bytes that snuck in don't blow up the parser. The
+        # logs ARE supposed to be UTF-8 JSON but we'd rather degrade
+        # gracefully than 500 on one bad line.
+        with log_path.open("r", encoding="utf-8", errors="replace") as fh:
+            fh.seek(src["offset"])
+            for line in fh:
+                line = line.rstrip("\n")
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                handler(record, _bump_updated_at)
+            src["offset"] = fh.tell()
+    except OSError:
+        return
+    src["mtime"] = st.st_mtime
+    src["size"] = st.st_size
+
+
+def _bump_updated_at(drawer_id: str, ts: str) -> None:
+    """Record a mutation's timestamp into the module-level cache,
+    keeping only the latest per drawer_id. Latest wins via string
+    compare on ISO 8601 (canonical form on both logs — Python's
+    datetime.isoformat() is lexicographically ordered, so microsecond
+    vs second precision compare cleanly)."""
+    if not drawer_id or not ts:
+        return
+    by_id = _UPDATED_AT_CACHE["by_id"]
+    if ts > by_id.get(drawer_id, ""):
+        by_id[drawer_id] = ts
+
+
+def _handle_mp_wal_record(record: dict, bump) -> None:
+    """wal/write_log.jsonl entry: {timestamp, operation, params: {drawer_id,
+    content_changed, ...}, result}. Only add_drawer and content-changing
+    update_drawer count — rename-only updates and tunnel/kg ops are
+    ignored since the freshness signal is per-drawer body, not
+    per-graph."""
+    op = record.get("operation", "")
+    if op not in ("add_drawer", "update_drawer"):
+        return
+    params = record.get("params") or {}
+    if op == "update_drawer" and not params.get("content_changed"):
+        return
+    bump(params.get("drawer_id"), record.get("timestamp", ""))
+
+
+def enrich_drawers_with_updated_at(drawers: list[dict]) -> None:
+    """Stamp each drawer with `updated_at` derived from MemPalace's
+    write-ahead log.
+
+    MemPalace stores `filed_at` (creation) in drawer metadata but no
+    updated_at. Edits land in ``wal/write_log.jsonl`` (MemPalace's own
+    WAL) as ``{timestamp, operation: "update_drawer", params: {...}}``
+    entries — captures EVERY mutation, including external MCP writes
+    (Codex, scripted, another Claude session) that bypass the
+    dashboard. The WAL is the single source of truth.
+
+    The dashboard used to also write a per-edit `update-before`
+    snapshot to its own log (`dashboard-versions.jsonl`) and this
+    function merged both. That dashboard-side snapshot was removed
+    2026-05-28 per the snapshots-only-for-deletions policy. The MP
+    WAL covers the same events because the dashboard's update path
+    ultimately calls the same MCP tool, so dropping the dashboard-log
+    branch costs no signal for dashboard-mediated edits, and external-
+    MCP edits were already going through this path exclusively.
+
+    Hot path: this function is called from build_payload() on every
+    /api/palace request. Re-parsing the WAL line by line on every
+    call would be O(total mutations ever), which scales poorly. Cache
+    via _UPDATED_AT_CACHE — keep the parsed by_id dict module-level,
+    only read the BYTES APPENDED since last call. Steady-state: one
+    stat() per request (page-cached by the OS, sub-microsecond) and
+    a tail-read of whatever's been written since. Truncation /
+    rotation detection in _ingest_updated_at_log_tail handles edge
+    cases by restarting from offset 0.
+
+    Drawers that have never been mutated fall back to `filed_at`
+    (which is both creation AND last-update by definition).
+    """
+    # Incrementally absorb any new tail bytes from the WAL into the
+    # shared module-level cache. No-op on a hot cache (file size
+    # unchanged → early return without opening the fd).
+    _ingest_updated_at_log_tail(MP_WAL_LOG, _handle_mp_wal_record)
+    # Lazy-load the restored-drawer set on first request — afterwards
+    # it lives in memory and _record_restored_drawer keeps it in sync
+    # with disk on every restore.
+    _load_restored_drawer_ids()
+    by_id = _UPDATED_AT_CACHE["by_id"]
+    for drawer in drawers:
+        drawer_id = drawer.get("drawer_id", "")
+        filed_at = drawer.get("filed_at", "")
+        # Restored drawers: clamp updated_at to filed_at so the bell +
+        # Updated-badge pipelines treat them as creation events (no
+        # delta), not edits. Restore goes through tool_add_drawer which
+        # appended an add_drawer record to the WAL with the restore
+        # timestamp — without this clamp, isUpdateEvent on the client
+        # would see (updated_at - filed_at) > 10s and misclassify the
+        # recovery as a fresh edit. See RESTORED_DRAWERS_LOG comment
+        # for the full rationale.
+        if drawer_id in _RESTORED_DRAWER_IDS:
+            drawer["updated_at"] = filed_at
+            continue
+        log_time = by_id.get(drawer_id, "")
+        drawer["updated_at"] = log_time or filed_at
 
 
 def extract_title(content: str, fallback: str) -> str:
@@ -520,6 +1023,11 @@ def build_payload() -> dict:
         "wings": sorted(wings.values(), key=lambda wing: wing["name"]),
         "drawers": drawers,
         "triples": triples,
+        # Shared seen-state map — piggy-backs on the palace response so
+        # every poll picks up notification-dismissal events from any
+        # browser/device on the LAN without an extra round trip. Empty
+        # dict for fresh installs.
+        "seen": load_seen_map(),
     }
 
 
@@ -579,12 +1087,34 @@ def draft_path(draft_id: str) -> Path:
 
 
 def list_drafts() -> list[dict]:
+    """List staged drafts as {id, title, wing, room, created_at} dicts.
+
+    Reads only the FRONTMATTER HEADER of each draft (the YAML-ish
+    `---` block + first ~12 lines) — never the full body. Drafts can
+    be large (tens of KB) and the list endpoint is hit on every
+    Drafts-sheet open, so bounding the per-file read keeps the
+    endpoint fast even with hundreds of drafts in the inbox. 1024
+    bytes comfortably covers the 7-line stock header plus a few lines
+    of slack, while still being well under the 4KB page cache block
+    on every modern filesystem so each read is essentially free.
+    """
     INBOX_DIR.mkdir(parents=True, exist_ok=True)
     drafts = []
     for path in sorted(INBOX_DIR.glob("*.md"), reverse=True):
-        text = path.read_text(encoding="utf-8", errors="replace")
         meta = {"id": path.stem, "title": path.stem, "wing": "", "room": "", "created_at": ""}
-        for line in text.splitlines()[:12]:
+        try:
+            with path.open("rb") as fh:
+                # Bounded read — header lives in the first ~7 lines of
+                # the template (see save_draft); 1024 bytes is plenty.
+                # decode("utf-8", errors="replace") matches the prior
+                # read_text behaviour for stray non-UTF-8 bytes.
+                head = fh.read(1024).decode("utf-8", errors="replace")
+        except OSError:
+            # Skip unreadable drafts rather than 500 the whole list —
+            # other drafts can still surface, and the Drafts UI will
+            # show whatever did parse.
+            continue
+        for line in head.splitlines()[:12]:
             if line.startswith("Title: "):
                 meta["title"] = line.removeprefix("Title: ").strip()
             elif line.startswith("Wing: "):
@@ -702,7 +1232,12 @@ def parse_mempalace_result(proc: subprocess.CompletedProcess) -> dict:
     raise RuntimeError(f"Unexpected MemPalace response: {detail or 'no output'}")
 
 
-def mempalace_add_drawer(wing: str, room: str, content: str, source_file: str) -> dict:
+def mempalace_add_drawer(wing: str, room: str, content: str, source_file: str, added_by: str = "User") -> dict:
+    # Default attribution is "User" because every dashboard-driven write
+    # path (Write panel, drafts commit, JSON import, trash restore) has
+    # the user as the actor. MCP-driven writes (Claude/Codex calling
+    # tool_add_drawer directly) set their own added_by per the protocol
+    # documented in CLAUDE.md / AGENTS.md / claude/rules/attribution.
     code = """
 import json, sys
 from mempalace.mcp_server import tool_add_drawer
@@ -712,13 +1247,13 @@ result = tool_add_drawer(
     room=payload["room"],
     content=payload["content"],
     source_file=payload["source_file"],
-    added_by="mempalace-dashboard",
+    added_by=payload["added_by"],
 )
 print(json.dumps(result))
 """
     proc = subprocess.run(
         [str(MEMPALACE_PYTHON), "-c", code],
-        input=json.dumps({"wing": wing, "room": room, "content": content, "source_file": source_file}),
+        input=json.dumps({"wing": wing, "room": room, "content": content, "source_file": source_file, "added_by": added_by}),
         text=True,
         capture_output=True,
         timeout=45,
@@ -733,15 +1268,19 @@ print(json.dumps(result))
     return result
 
 
-def file_memory(payload: dict) -> dict:
+def file_memory(payload: dict, actor: str = "User") -> dict:
     wing, room, title, content = validate_memory_payload(payload)
     heading = title or extract_title(content, f"{wing}/{room} memory")
     body = content if content.lstrip().startswith("#") else f"# {heading}\n\n{content}"
+    # source = "UI" + added_by = <auth username> (e.g. "zhiar"). The
+    # actor is captured at the request handler from the authenticated
+    # session — see claude/rules/attribution for the vocabulary.
     result = mempalace_add_drawer(
         wing=wing,
         room=room,
         content=body,
-        source_file=f"mempalace-dashboard:{datetime.now().isoformat(timespec='seconds')}",
+        source_file="UI",
+        added_by=actor,
     )
     return {"success": True, "result": result, "wing": wing, "room": room, "title": heading}
 
@@ -835,9 +1374,15 @@ def update_memory(payload: dict) -> dict:
     if new_content is None and new_wing is None and new_room is None:
         raise ValueError("Nothing to update — provide content, wing, or room.")
 
-    log_version("update-before", current, note=f"set " + ",".join(
-        k for k, v in {"content": new_content, "wing": new_wing, "room": new_room}.items() if v is not None
-    ))
+    # No log_version("update-before", ...) here per the snapshots-only-
+    # for-deletions policy (2026-05-28). The dashboard used to write a
+    # snapshot of the pre-edit state on every save, but that filled the
+    # trash bin with restorable "version history" entries that were
+    # confusing the user (looked like duplicate deletions of the same
+    # drawer). Going forward, only explicit deletions produce snapshot
+    # rows. Client-side optimistic-edit failure recovery uses an in-
+    # memory snapshot in the editor (see commitEditMode in app.js), so
+    # the server-side snapshot is no longer the only line of defense.
 
     result = mempalace_update_drawer(drawer_id, new_content, new_wing, new_room)
     return {"success": True, "result": result, "drawer_id": drawer_id}
@@ -910,7 +1455,11 @@ def rename_scope(payload: dict) -> dict:
             raise ValueError(f"No drawers found in wing {wing}.")
         results = []
         for drawer in matches:
-            log_version("rename-before", drawer, note=f"wing {wing} -> {new_name}")
+            # No log_version("rename-before", ...) — snapshots-only-
+            # for-deletions policy (2026-05-28). Rename is a non-
+            # destructive operation; the drawer survives, just with a
+            # new wing. If a rename ever needs to be undone, the user
+            # renames it back; the dashboard doesn't try to be a VCS.
             result = mempalace_update_drawer(drawer["drawer_id"], wing=new_name)
             results.append({"drawer_id": drawer["drawer_id"], "result": result})
         return {"success": True, "renamed": len(results), "target": f"wing {wing} -> {new_name}", "scope": "wing"}
@@ -927,7 +1476,9 @@ def rename_scope(payload: dict) -> dict:
             raise ValueError(f"No drawers found in room {wing}/{room}.")
         results = []
         for drawer in matches:
-            log_version("rename-before", drawer, note=f"room {wing}/{room} -> {wing}/{new_name}")
+            # No log_version("rename-before", ...) per the snapshots-
+            # only-for-deletions policy. See the wing-rename branch
+            # above for the same rationale.
             result = mempalace_update_drawer(drawer["drawer_id"], room=new_name)
             results.append({"drawer_id": drawer["drawer_id"], "result": result})
         return {"success": True, "renamed": len(results), "target": f"room {wing}/{room} -> {wing}/{new_name}", "scope": "room"}
@@ -1027,10 +1578,15 @@ def invalidate_fact(payload: dict) -> dict:
 
 
 def delete_version(payload: dict) -> dict:
+    # Snapshots are matched by (logged_at, identifier). Drawer snapshots
+    # carry drawer_id at the top level; tunnel snapshots carry tunnel.id
+    # nested inside. Accept either identifier from the caller so a single
+    # trash UI can permanently delete both kinds.
     drawer_id = str(payload.get("drawer_id", "")).strip()
+    tunnel_id = str(payload.get("tunnel_id", "")).strip()
     logged_at = str(payload.get("logged_at", "")).strip()
-    if not drawer_id and not logged_at:
-        raise ValueError("drawer_id and logged_at are required.")
+    if not (drawer_id or tunnel_id) or not logged_at:
+        raise ValueError("logged_at plus either drawer_id or tunnel_id is required.")
     if not VERSIONS_LOG.exists():
         return {"success": True, "removed": 0}
     lines = VERSIONS_LOG.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -1044,7 +1600,13 @@ def delete_version(payload: dict) -> dict:
         except json.JSONDecodeError:
             kept.append(line)
             continue
-        if rec.get("drawer_id") == drawer_id and rec.get("logged_at") == logged_at:
+        rec_tunnel = rec.get("tunnel") or {}
+        rec_tunnel_id = str(rec_tunnel.get("id") or rec_tunnel.get("tunnel_id") or "")
+        matches = (
+            (drawer_id and rec.get("drawer_id") == drawer_id and rec.get("logged_at") == logged_at)
+            or (tunnel_id and rec_tunnel_id == tunnel_id and rec.get("logged_at") == logged_at)
+        )
+        if matches:
             removed += 1
             continue
         kept.append(line)
@@ -1064,12 +1626,309 @@ def clear_versions(payload: dict) -> dict:
     return {"success": True}
 
 
+# ---------- Dashboard preferences (machine-wide, server-stored) ----------
+# Lives in ~/.mempalace/dashboard-preferences.json — same directory and
+# permission shape as credentials/sessions. Plain JSON, atomically
+# rewritten on every change. Currently only stores trash retention but
+# the structure is open-ended for future per-install settings.
+PREFERENCES_DEFAULTS: dict = {
+    # 0 = keep forever; otherwise allow-listed by TRASH_RETENTION_ALLOWED.
+    "trash_auto_delete_days": 0,
+    # Disable ambient/decorative animations (search-ring rotation,
+    # settings gear spin, memory-card waterfall, theme-dropdown
+    # cascade). Honoured client-side via an html.reduce-motion class.
+    "reduce_motion": False,
+    # Default sort for the memories list when no URL hash overrides it.
+    # Allow-listed by SORT_ALLOWED below.
+    "default_sort": "filed-desc",
+    # When false, the footer's stats + system-info blocks are hidden
+    # for a cleaner bottom edge (privacy bonus during screen-sharing).
+    "show_footer_info": True,
+    # User-remappable keyboard shortcuts. Values are KeyboardEvent.key
+    # strings ("f", "x", "Backspace", "Enter", etc.). The client reads
+    # these via getShortcut(action) with these defaults as fallback,
+    # so leaving the key absent or empty re-enables the default. Each
+    # action maps to one global keyboard handler in app.js — collisions
+    # (e.g. mapping two actions to the same key) are the user's choice;
+    # whichever handler runs first in the keydown listener wins.
+    "shortcuts": {"maximize": "f", "close": "x", "delete": "Backspace", "edit": "e"},
+    # Memories panel browse mode: instead of always 4 columns and an
+    # always-visible toggle, scale columns to the filtered count and
+    # hide the toggle when the list is short enough to scroll easily.
+    # Thresholds live in app.js (adaptiveBrowseCols). Off-mode restores
+    # the original "always 4 cols, always show toggle" behavior.
+    "adaptive_browse": True,
+    # Display-layer cosmetic text normalization: drawer titles get
+    # Title-Cased and underscores → spaces (cleanTitle), wing/room
+    # slugs get Title-Cased with acronyms upper (humanizeName), author
+    # names get re-capitalized (prettifyActorName). When OFF, the raw
+    # stored text is rendered as-is — useful for debugging or for
+    # users who want to see exactly what's on disk. Storage is never
+    # touched either way; this only affects rendering.
+    "polish_text": True,
+    # Relative-time format on card kickers and the meta-strip "Updated"
+    # cell ("2h ago", "yesterday", "3d ago"). When OFF, all date
+    # surfaces render the absolute timestamp instead — formatDate
+    # ("28 May 2026") for card kickers, formatTimestamp ("28 May
+    # 2026 – 03:31") for the meta-strip UPDATED cell so it matches
+    # the format of the sibling FILED cell. Detail-panel timestamps
+    # are unaffected (they were always absolute).
+    "relative_time": True,
+    # Memories + Detail panel chrome (maximize / close pill) visibility.
+    # Default FALSE = macOS-style hover-reveal: the controls fade in only
+    # when the user's cursor is over the parent panel (or a child has
+    # keyboard focus). When TRUE the controls stay opacity:1 at all
+    # times — useful for discoverability or frequent
+    # maximize/close cycling. CSS rule lives in styles.css; this flag
+    # drives a body class the client toggles on/off.
+    "panel_controls_always_visible": False,
+    # Notification bell: when TRUE, suppress drawer-update notifications
+    # (the "Updated 5m ago" entries that fire when a memory is edited
+    # via the dashboard or via an external MCP client). Failed-save
+    # notifications still appear regardless — those are errors that
+    # need user attention. Default FALSE = show all notifications.
+    "suppress_update_notifications": False,
+    # Notification bell: when TRUE, play a brief synthesized two-tone
+    # chime via Web Audio API whenever the notification count grows
+    # (new failure pushed onto failedSaves, or a drawer becomes
+    # recently-updated). Default TRUE — Apple-style modest audio
+    # affordance for arriving notifications. The client debounces to
+    # avoid back-to-back tones within 500ms.
+    "notification_sounds": True,
+    # Background polling cadence (seconds) for the live-notification
+    # refresh — how often the client re-fetches /api/palace so the
+    # bell catches drawer updates from external MCP clients without a
+    # hard refresh. Allow-listed to {15, 30, 60} via
+    # NOTIFICATION_POLL_INTERVAL_ALLOWED below. Default 30s strikes a
+    # balance between "feels live" and "doesn't burn Pi CPU every
+    # second".
+    "notification_poll_interval": 30,
+}
+NOTIFICATION_POLL_INTERVAL_ALLOWED: set[int] = {15, 30, 60}
+TRASH_RETENTION_ALLOWED: set[int] = {0, 1, 7, 14, 30}
+SORT_ALLOWED: set[str] = {"filed-desc", "filed-asc", "title", "wing"}
+SHORTCUT_ACTIONS: set[str] = {"maximize", "close", "delete", "edit"}
+
+
+def load_preferences() -> dict:
+    """Read the preferences file, returning DEFAULTS overlaid with any
+    valid values from disk. Missing file → defaults. Malformed file →
+    defaults (never crashes the server)."""
+    prefs = dict(PREFERENCES_DEFAULTS)
+    if not PREFERENCES_FILE.exists():
+        return prefs
+    try:
+        raw = PREFERENCES_FILE.read_text(encoding="utf-8")
+        stored = json.loads(raw)
+        if isinstance(stored, dict):
+            tad = stored.get("trash_auto_delete_days")
+            if isinstance(tad, (int, float)) and int(tad) in TRASH_RETENTION_ALLOWED:
+                prefs["trash_auto_delete_days"] = int(tad)
+            rm = stored.get("reduce_motion")
+            if isinstance(rm, bool):
+                prefs["reduce_motion"] = rm
+            ds = stored.get("default_sort")
+            if isinstance(ds, str) and ds in SORT_ALLOWED:
+                prefs["default_sort"] = ds
+            sfi = stored.get("show_footer_info")
+            if isinstance(sfi, bool):
+                prefs["show_footer_info"] = sfi
+            ab = stored.get("adaptive_browse")
+            if isinstance(ab, bool):
+                prefs["adaptive_browse"] = ab
+            pt = stored.get("polish_text")
+            if isinstance(pt, bool):
+                prefs["polish_text"] = pt
+            rt = stored.get("relative_time")
+            if isinstance(rt, bool):
+                prefs["relative_time"] = rt
+            pcav = stored.get("panel_controls_always_visible")
+            if isinstance(pcav, bool):
+                prefs["panel_controls_always_visible"] = pcav
+            sun = stored.get("suppress_update_notifications")
+            if isinstance(sun, bool):
+                prefs["suppress_update_notifications"] = sun
+            ns = stored.get("notification_sounds")
+            if isinstance(ns, bool):
+                prefs["notification_sounds"] = ns
+            npi = stored.get("notification_poll_interval")
+            if isinstance(npi, (int, float)) and int(npi) in NOTIFICATION_POLL_INTERVAL_ALLOWED:
+                prefs["notification_poll_interval"] = int(npi)
+            scs = stored.get("shortcuts")
+            if isinstance(scs, dict):
+                merged = dict(PREFERENCES_DEFAULTS["shortcuts"])
+                for action, key in scs.items():
+                    if (
+                        action in SHORTCUT_ACTIONS
+                        and isinstance(key, str)
+                        and 0 < len(key) <= 32
+                    ):
+                        merged[action] = key
+                prefs["shortcuts"] = merged
+    except (OSError, ValueError):
+        pass
+    return prefs
+
+
+def save_preferences(updates: dict) -> dict:
+    """Merge `updates` into the current preferences and persist.
+    Returns the resulting dict (post-validation). Unknown keys are
+    silently dropped; invalid values are ignored (the existing value
+    is kept)."""
+    current = load_preferences()
+    if "trash_auto_delete_days" in updates:
+        candidate = updates["trash_auto_delete_days"]
+        if isinstance(candidate, (int, float)) and int(candidate) in TRASH_RETENTION_ALLOWED:
+            current["trash_auto_delete_days"] = int(candidate)
+    if "reduce_motion" in updates and isinstance(updates["reduce_motion"], bool):
+        current["reduce_motion"] = updates["reduce_motion"]
+    if "default_sort" in updates and isinstance(updates["default_sort"], str) and updates["default_sort"] in SORT_ALLOWED:
+        current["default_sort"] = updates["default_sort"]
+    if "show_footer_info" in updates and isinstance(updates["show_footer_info"], bool):
+        current["show_footer_info"] = updates["show_footer_info"]
+    if "adaptive_browse" in updates and isinstance(updates["adaptive_browse"], bool):
+        current["adaptive_browse"] = updates["adaptive_browse"]
+    if "polish_text" in updates and isinstance(updates["polish_text"], bool):
+        current["polish_text"] = updates["polish_text"]
+    if "relative_time" in updates and isinstance(updates["relative_time"], bool):
+        current["relative_time"] = updates["relative_time"]
+    if "panel_controls_always_visible" in updates and isinstance(updates["panel_controls_always_visible"], bool):
+        current["panel_controls_always_visible"] = updates["panel_controls_always_visible"]
+    if "suppress_update_notifications" in updates and isinstance(updates["suppress_update_notifications"], bool):
+        current["suppress_update_notifications"] = updates["suppress_update_notifications"]
+    if "notification_sounds" in updates and isinstance(updates["notification_sounds"], bool):
+        current["notification_sounds"] = updates["notification_sounds"]
+    if "notification_poll_interval" in updates:
+        candidate = updates["notification_poll_interval"]
+        if isinstance(candidate, (int, float)) and int(candidate) in NOTIFICATION_POLL_INTERVAL_ALLOWED:
+            current["notification_poll_interval"] = int(candidate)
+    if "shortcuts" in updates and isinstance(updates["shortcuts"], dict):
+        # Per-action merge so a patch can update one binding without
+        # wiping the other two. Same per-key validation as load_pref-
+        # erences keeps the disk format consistent across both paths.
+        merged = dict(current.get("shortcuts", PREFERENCES_DEFAULTS["shortcuts"]))
+        for action, key in updates["shortcuts"].items():
+            if (
+                action in SHORTCUT_ACTIONS
+                and isinstance(key, str)
+                and 0 < len(key) <= 32
+            ):
+                merged[action] = key
+        current["shortcuts"] = merged
+    PREFERENCES_FILE.parent.mkdir(parents=True, exist_ok=True)
+    PREFERENCES_FILE.write_text(
+        json.dumps(current, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return current
+
+
+def prune_versions_older_than(days: int) -> int:
+    """Physically remove entries from VERSIONS_LOG whose `logged_at` is
+    older than `days` days ago. Returns the count of pruned entries.
+
+    Called LAZILY from /api/versions GET when the client passes
+    ?prune_after_days=N (driven by the dashboard's Settings → Trash
+    bin → auto-delete-after preference). No background sweeper — the
+    cleanup runs whenever the trash is read, which means: the moment
+    the user opens the dashboard's Recently-deleted view, anything
+    older than their chosen threshold is gone for good before the
+    list renders. If the dashboard is closed for a month, the prune
+    runs the next time it opens (correct behaviour either way).
+
+    Entries with malformed JSON or a missing/unparseable `logged_at`
+    are KEPT — pruning is conservative; we never destroy data we
+    can't reason about. """
+    if days <= 0 or not VERSIONS_LOG.exists():
+        return 0
+    threshold = datetime.now() - timedelta(days=days)
+    lines = VERSIONS_LOG.read_text(encoding="utf-8", errors="replace").splitlines()
+    kept: list[str] = []
+    pruned = 0
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        try:
+            record = json.loads(stripped)
+        except json.JSONDecodeError:
+            kept.append(line)
+            continue
+        logged_at = record.get("logged_at", "")
+        try:
+            ts = datetime.fromisoformat(logged_at)
+        except (ValueError, TypeError):
+            kept.append(line)
+            continue
+        if ts < threshold:
+            pruned += 1
+            continue
+        kept.append(line)
+    if pruned > 0:
+        if kept:
+            VERSIONS_LOG.write_text("\n".join(kept) + "\n", encoding="utf-8")
+        else:
+            VERSIONS_LOG.unlink(missing_ok=True)
+    return pruned
+
+
 def restore_version(payload: dict) -> dict:
+    # Restore dispatches on snapshot kind. Drawer snapshots carry
+    # drawer_id at the top level; tunnel snapshots have kind="tunnel" and
+    # the full tunnel record nested under "tunnel". Callers send whichever
+    # identifier matches the kind they're restoring.
     drawer_id = str(payload.get("drawer_id", "")).strip()
+    tunnel_id = str(payload.get("tunnel_id", "")).strip()
     logged_at = str(payload.get("logged_at", "")).strip()
-    if not drawer_id:
-        raise ValueError("drawer_id is required to restore.")
+    if not (drawer_id or tunnel_id):
+        raise ValueError("drawer_id or tunnel_id is required to restore.")
     records = read_versions(limit=2000)
+
+    if tunnel_id:
+        # Tunnel restore. Match exact (id, logged_at) first; fall back to
+        # the most-recent delete_tunnel for that id if logged_at is stale.
+        def _rec_tunnel_id(r: dict) -> str:
+            t = r.get("tunnel") or {}
+            return str(t.get("id") or t.get("tunnel_id") or "")
+
+        record = next(
+            (r for r in records if _rec_tunnel_id(r) == tunnel_id and r.get("logged_at") == logged_at),
+            None,
+        )
+        if not record:
+            record = next(
+                (r for r in records if _rec_tunnel_id(r) == tunnel_id and r.get("action") == "delete_tunnel"),
+                None,
+            )
+        if not record:
+            raise ValueError("No snapshot found for that tunnel.")
+        tunnel = record.get("tunnel") or {}
+        src = tunnel.get("source") or {}
+        tgt = tunnel.get("target") or {}
+        source_wing = str(src.get("wing") or "").strip()
+        source_room = str(src.get("room") or "").strip()
+        target_wing = str(tgt.get("wing") or "").strip()
+        target_room = str(tgt.get("room") or "").strip()
+        if not (source_wing and source_room and target_wing and target_room):
+            raise ValueError("Snapshot endpoints are incomplete; cannot restore automatically.")
+        result = mcp_call(
+            "tool_create_tunnel",
+            source_wing=source_wing,
+            source_room=source_room,
+            target_wing=target_wing,
+            target_room=target_room,
+            label=str(tunnel.get("label") or "") or None,
+            source_drawer_id=(str(src.get("drawer_id") or "") or None),
+            target_drawer_id=(str(tgt.get("drawer_id") or "") or None),
+        )
+        # Consume the snapshot: once a tunnel is back in the live store,
+        # the deletion record in Recently deleted is stale and confusing
+        # (the same row would still read as "deleted" on re-open). Remove
+        # it so trash reflects current truth.
+        delete_version({"tunnel_id": tunnel_id, "logged_at": record.get("logged_at", "")})
+        return {"success": True, "kind": "tunnel", "result": result}
+
+    # Drawer restore (existing flow).
     record = next((r for r in records if r.get("drawer_id") == drawer_id and r.get("logged_at") == logged_at), None)
     if not record:
         record = next((r for r in records if r.get("drawer_id") == drawer_id and r.get("action") in ("delete", "update-before")), None)
@@ -1082,17 +1941,73 @@ def restore_version(payload: dict) -> dict:
     if not NAME_RE.match(wing) or not NAME_RE.match(room):
         raise ValueError("Stored wing/room are invalid; cannot restore automatically.")
 
+    # Restore must preserve the original provenance — added_by, source_file,
+    # filed_at all come from the snapshot, NOT from the restore action.
+    # The earlier version stamped "User"/"Restore"/<now> over the original
+    # values, which is a bug: deleting + restoring shouldn't quietly rewrite
+    # who wrote a memory or when. The new drawer_id is necessarily fresh
+    # (Chroma drops the old id on delete), but the other metadata is
+    # immutable as far as authorship goes.
+    original_added_by = str(record.get("added_by") or "").strip() or "Direct"
+    original_source = str(record.get("source_file") or "").strip() or "Direct"
+    original_filed_at = str(record.get("filed_at") or "").strip()
     result = mempalace_add_drawer(
         wing=wing,
         room=room,
         content=content,
-        source_file=f"mempalace-dashboard:restore:{drawer_id}:{datetime.now().isoformat(timespec='seconds')}",
+        source_file=original_source,
+        added_by=original_added_by,
     )
+    new_drawer_id = result.get("drawer_id")
+    # Stamp original filed_at over the fresh one tool_add_drawer set.
+    # Direct SQL on the new row's metadata because MP exposes no hook for
+    # preserving filed_at through the write API.
+    if new_drawer_id and original_filed_at:
+        try:
+            con = sqlite3.connect(PALACE_DB)
+            con.row_factory = sqlite3.Row
+            row = con.execute(
+                "SELECT id FROM embeddings WHERE embedding_id = ?", (new_drawer_id,)
+            ).fetchone()
+            if row:
+                con.execute(
+                    "UPDATE embedding_metadata SET string_value = ? WHERE id = ? AND key = 'filed_at'",
+                    (original_filed_at, row["id"]),
+                )
+                con.commit()
+            con.close()
+        except sqlite3.Error:
+            # Filed-at preservation is best-effort — a failure here doesn't
+            # invalidate the restore itself, the user just sees a fresh
+            # timestamp instead of the original. Log via the audit entry.
+            pass
+    # Mark the new drawer_id as a restoration so enrich_drawers_with_
+    # updated_at clamps its updated_at = filed_at on every subsequent
+    # /api/palace read. Without this the bell pulses + the "Updated"
+    # badge fires on every restore (the WAL's add_drawer record for
+    # the restore is younger than the preserved filed_at by definition).
+    if new_drawer_id:
+        _record_restored_drawer(new_drawer_id)
+    # Audit log entry for the restore action; then consume the original
+    # delete/update-before snapshot so trash stops listing it. Behavior
+    # parallels the tunnel branch above.
     log_version("restore", record, note=f"restored from {logged_at}")
-    return {"success": True, "result": result, "wing": wing, "room": room}
+    delete_version({"drawer_id": drawer_id, "logged_at": record.get("logged_at", "")})
+    # new_drawer_id is also exposed at top level (not just nested in
+    # result) so the client can call markDrawerSeen on it without
+    # digging into the MP-tool-return shape — keeps the optimistic-
+    # restore flow's client code simpler.
+    return {
+        "success": True,
+        "kind": "drawer",
+        "result": result,
+        "wing": wing,
+        "room": room,
+        "new_drawer_id": new_drawer_id,
+    }
 
 
-def commit_draft(payload: dict) -> dict:
+def commit_draft(payload: dict, actor: str = "User") -> dict:
     draft_id = str(payload.get("id", "")).strip()
     confirm = str(payload.get("confirm", "")).strip()
     if confirm != "FILE":
@@ -1119,7 +2034,10 @@ def commit_draft(payload: dict) -> dict:
     content = "\n".join(lines[content_start:]).strip()
     validate_memory_payload({"wing": wing, "room": room, "title": meta.get("title", ""), "content": content})
 
-    result = mempalace_add_drawer(wing=wing, room=room, content=content, source_file=str(path))
+    # Drafts are written via the dashboard UI even though they live on
+    # disk first — source = "UI", actor = the authenticated dashboard
+    # user (e.g. "zhiar"), captured in the request handler.
+    result = mempalace_add_drawer(wing=wing, room=room, content=content, source_file="UI", added_by=actor)
 
     ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
     archived = ARCHIVE_DIR / path.name
@@ -1414,13 +2332,58 @@ class Handler(SimpleHTTPRequestHandler):
         super().__init__(*args, directory=str(ROOT / "static"), **kwargs)
 
     def end_headers(self) -> None:
-        self.send_header("Cache-Control", "no-store")
+        # Cache policy is conditional on whether the request carries a
+        # ?v= cache-buster query (app.js?v=250, styles.css?v=328, …).
+        #
+        # Versioned static assets are IMMUTABLE for that version — the
+        # query string changes whenever the file content changes, so
+        # the browser can hold the bytes for a year and skip the
+        # download entirely on subsequent refreshes. Previously EVERY
+        # response (including the 440KB app.js + 288KB styles.css) was
+        # `no-store`, forcing a full re-download + re-parse on every
+        # single page load — that was the "content briefly blank on
+        # refresh" the user reported (the static assets had to travel
+        # the LAN again before the SPA could boot).
+        #
+        # Everything else — the HTML entry point, API responses,
+        # un-versioned assets — stays `no-store` so the app always
+        # boots against fresh data and the index always picks up the
+        # newest ?v= references. The index being uncached is what makes
+        # the immutable-asset strategy safe: a version bump in the HTML
+        # is seen immediately, pointing at a new (uncached) asset URL.
+        path = self.path or ""
+        if "?v=" in path or "&v=" in path:
+            self.send_header("Cache-Control", "public, max-age=31536000, immutable")
+        else:
+            self.send_header("Cache-Control", "no-store")
         super().end_headers()
+
+    def _accepts_gzip(self) -> bool:
+        return "gzip" in (self.headers.get("Accept-Encoding") or "").lower()
+
+    def _maybe_gzip(self, body: bytes, min_size: int = 1024) -> tuple[bytes, bool]:
+        """Gzip the body when the client accepts it and it's worth it.
+        Returns (bytes, was_gzipped). Small bodies skip compression (the
+        gzip header overhead isn't worth it under ~1KB)."""
+        if len(body) < min_size or not self._accepts_gzip():
+            return body, False
+        try:
+            return gzip.compress(body, compresslevel=6), True
+        except OSError:
+            return body, False
 
     def respond_json(self, payload: dict, status: int = 200, extra_headers: list[tuple[str, str]] | None = None) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        # Gzip large JSON payloads on the wire — /api/palace is ~470KB raw,
+        # ~135KB gzipped. The LAN is fast but the browser still has to read
+        # the whole body before parsing, so this shaves real transfer time
+        # for the big endpoints while tiny responses pass through untouched.
+        body, gzipped = self._maybe_gzip(body)
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
+        if gzipped:
+            self.send_header("Content-Encoding", "gzip")
+            self.send_header("Vary", "Accept-Encoding")
         self.send_header("Content-Length", str(len(body)))
         for name, value in (extra_headers or []):
             self.send_header(name, value)
@@ -1503,13 +2466,37 @@ class Handler(SimpleHTTPRequestHandler):
                 self.respond_json({"drafts": list_drafts()})
                 return
             if parsed.path == "/api/versions":
+                # Lazy auto-prune driven by the SERVER-side preference
+                # (machine-wide, set via Settings → Trash bin). On
+                # every read of the trash, anything older than the
+                # stored retention is physically removed before the
+                # list is returned — so every read is also the cleanup
+                # pass. No background sweeper.
+                prefs = load_preferences()
+                retention = int(prefs.get("trash_auto_delete_days", 0))
+                if retention > 0:
+                    prune_versions_older_than(retention)
                 self.respond_json({"versions": read_versions()})
+                return
+            if parsed.path == "/api/preferences":
+                self.respond_json({"preferences": load_preferences()})
+                return
+            if parsed.path == "/api/seen":
+                # Standalone GET for the shared seen map. Also included
+                # in /api/palace payload so most clients never hit this
+                # endpoint directly — it's here as the canonical source
+                # for any tooling/scripting that wants the seen state
+                # without pulling the full palace.
+                self.respond_json({"seen": load_seen_map()})
                 return
             if parsed.path == "/api/settings":
                 self.respond_json(get_settings_status())
                 return
             if parsed.path == "/api/system":
                 self.respond_json(get_system_info())
+                return
+            if parsed.path == "/api/version":
+                self.respond_json(get_version_info())
                 return
             if parsed.path == "/api/export":
                 self.respond_json(build_export())
@@ -1561,7 +2548,59 @@ class Handler(SimpleHTTPRequestHandler):
                 return
             self.respond_json({"success": False, "error": "Not found"}, status=404)
             return
+        # Static files: try the custom server (minify .js + gzip text) first;
+        # fall back to the stdlib handler for anything it doesn't special-case
+        # (binary assets, directory listings, range requests, etc.).
+        if self._serve_static(parsed.path):
+            return
         super().do_GET()
+
+    def _serve_static(self, url_path: str) -> bool:
+        """Serve a static file with JS-minify + gzip when applicable.
+        Returns True if it fully handled the response, False to defer to
+        the stdlib SimpleHTTPRequestHandler (binary, missing, etc.)."""
+        # Map URL → file under static/. "/" → index.html. Strip query.
+        rel = url_path.lstrip("/") or "index.html"
+        # Resolve and confine to STATIC_DIR (defense-in-depth against ..).
+        try:
+            target = (STATIC_DIR / rel).resolve()
+            target.relative_to(STATIC_DIR.resolve())
+        except (ValueError, OSError):
+            return False
+        if not target.is_file():
+            return False
+        suffix = target.suffix.lower()
+        # Only special-case the text assets that benefit. Everything else
+        # (png, ico, svg, …) defers to stdlib (which handles binary + ranges).
+        if suffix == ".js":
+            body = get_minified_js(target)
+            ctype = "text/javascript; charset=utf-8"
+        elif suffix == ".css":
+            body = target.read_bytes()
+            ctype = "text/css; charset=utf-8"
+        elif suffix in (".html", ".htm"):
+            body = target.read_bytes()
+            ctype = "text/html; charset=utf-8"
+        elif suffix == ".json":
+            body = target.read_bytes()
+            ctype = "application/json; charset=utf-8"
+        elif suffix == ".svg":
+            body = target.read_bytes()
+            ctype = "image/svg+xml"
+        else:
+            return False  # binary / unknown → stdlib
+        body, gzipped = self._maybe_gzip(body)
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        if gzipped:
+            self.send_header("Content-Encoding", "gzip")
+            self.send_header("Vary", "Accept-Encoding")
+        self.send_header("Content-Length", str(len(body)))
+        # end_headers() applies the ?v= immutable / no-store cache policy.
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(body)
+        return True
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
@@ -1593,6 +2632,10 @@ class Handler(SimpleHTTPRequestHandler):
             return
         if parsed.path.startswith("/api/") and not self._auth_exempt(parsed.path) and not self._enforce_auth():
             return
+        # Pull the authenticated username so write paths can attribute by
+        # account, not the generic "User". Falls back to "User" only
+        # when no auth is configured at all (first-boot edge case).
+        actor = validate_session(self._read_session_id()) or "User"
         try:
             if parsed.path == "/api/drafts":
                 self.respond_json(save_draft(self.read_json()), status=201)
@@ -1604,10 +2647,10 @@ class Handler(SimpleHTTPRequestHandler):
                 self.respond_json(delete_draft(self.read_json()))
                 return
             if parsed.path == "/api/drafts/commit":
-                self.respond_json(commit_draft(self.read_json()))
+                self.respond_json(commit_draft(self.read_json(), actor=actor))
                 return
             if parsed.path == "/api/memories":
-                self.respond_json(file_memory(self.read_json()), status=201)
+                self.respond_json(file_memory(self.read_json(), actor=actor), status=201)
                 return
             if parsed.path == "/api/memories/update":
                 self.respond_json(update_memory(self.read_json()))
@@ -1619,7 +2662,7 @@ class Handler(SimpleHTTPRequestHandler):
                 self.respond_json(rename_scope(self.read_json()))
                 return
             if parsed.path == "/api/import":
-                self.respond_json(import_palace(self.read_json()))
+                self.respond_json(import_palace(self.read_json(), actor=actor))
                 return
             if parsed.path == "/api/facts":
                 self.respond_json(add_fact(self.read_json()), status=201)
@@ -1635,6 +2678,26 @@ class Handler(SimpleHTTPRequestHandler):
                 return
             if parsed.path == "/api/versions/clear":
                 self.respond_json(clear_versions(self.read_json()))
+                return
+            if parsed.path == "/api/preferences":
+                # Merge-style write: only the keys present in the body
+                # are updated; everything else keeps its current value.
+                updated = save_preferences(self.read_json() or {})
+                self.respond_json({"preferences": updated})
+                return
+            if parsed.path == "/api/seen":
+                # Body: {drawer_ids: [...], seen_at?: iso}. Stamps each
+                # id with seen_at (or now) in the shared map and
+                # persists to dashboard-seen.json. Returns the updated
+                # map so the calling client doesn't have to re-fetch
+                # to confirm the write landed.
+                body = self.read_json() or {}
+                ids = body.get("drawer_ids") or []
+                if not isinstance(ids, list):
+                    ids = []
+                seen_at = body.get("seen_at") if isinstance(body.get("seen_at"), str) else None
+                updated = mark_drawers_seen([str(i) for i in ids if i], seen_at)
+                self.respond_json({"seen": updated})
                 return
             if parsed.path == "/api/settings/credentials":
                 result = update_credentials(self.read_json())

@@ -30,8 +30,18 @@ Thumbs.db
 .env.local
 
 # Runtime / per-host data (kept under $MEMPALACE_HOME by default,
-# but defensively listed in case anyone reconfigures to keep them in-tree)
+# but defensively listed in case anyone reconfigures to keep them in-tree).
+# This list also doubles as a CHECK on what kinds of files MUST NEVER be
+# committed — anything touching live MemPalace state, credentials, or
+# per-host operational data belongs here.
 dashboard-credentials.json
 dashboard-sessions.json
 dashboard-versions.jsonl
+dashboard-restored-drawers.jsonl
+dashboard-preferences.json
 dashboard-inbox/
+*.sqlite3
+*.sqlite3-journal
+wal/
+knowledge_graph.sqlite3
+palace/
