@@ -64,7 +64,7 @@ It is *not* a memory system of its own — it reads and writes an existing MemPa
   <br />
   <sub>The search bar's always-on rotating ring — Apricity's “alive and listening” affordance. <code>⌘K</code> from anywhere.</sub>
 </div>
-
+  <br />
 - **Search** across content and metadata, **filter** by author, and **sort** by date or title (with a configurable default). `⌘K` focuses it from anywhere; `Enter` jumps to the first match.
 - **Three panes** — a Rooms sidebar (wings → rooms, iOS-style drill-down), a Memories list, and a Detail view.
 - **Browse mode** — maximize the Memories panel into an adaptive multi-column grid; toggle with `F`.
@@ -82,7 +82,7 @@ It is *not* a memory system of its own — it reads and writes an existing MemPa
   <br />
   <sub>The inline WYSIWYG editor — circular toolbar, live bold/italic, <code>## </code> → heading autoformat, and callouts. No modal, no raw-Markdown round-trip.</sub>
 </div>
-
+  <br />
 - **Inline visual editor** — a WYSIWYG editor for bold/italic, headings, lists, links, and callouts, with Markdown autoformatting and HTML→Markdown conversion on save. No modal, no raw-Markdown round-trip.
 - **Edit metadata** — change content, title, wing, and room, or move a memory between rooms, with content-hash ETag protection against concurrent edits.
 - **Optimistic saves** — edits apply instantly and revert automatically (with a notification and a retry affordance) if the server rejects them.
