@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 240" width="760" height="240" role="img" aria-label="Apricity inline editor: a circular formatting toolbar, bold/italic applied live, and a callout block">
+  <title>Apricity inline editor — circular toolbar, live formatting, callouts (light)</title>
+  <defs>
+    <style>
+      .surf{fill:#ffffff;stroke:#e6e6e9;stroke-width:1}
+      .tool{fill:#ffffff;stroke:#e6e6e9;stroke-width:1}
+      .glyph{fill:#1d1d1f;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
+      .body{fill:#1d1d1f;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:15px}
+      .muted{fill:#86868b}
+      .chip{fill:#eef5f9;stroke:rgba(63,148,186,0.35);stroke-width:1}
+      .chiptx{fill:#3f94ba;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:11.5px;font-weight:600}
+    </style>
+  </defs>
+
+  <!-- editor surface -->
+  <rect x="16" y="14" width="728" height="212" rx="16" class="surf"/>
+
+  <!-- wing / room chips (top-left, like the editor chips bar) -->
+  <g>
+    <rect x="34" y="30" width="78" height="24" rx="12" class="chip"/>
+    <text x="73" y="46" text-anchor="middle" class="chiptx">notes</text>
+    <rect x="120" y="30" width="86" height="24" rx="12" class="chip"/>
+    <text x="163" y="46" text-anchor="middle" class="chiptx">general</text>
+  </g>
+
+  <!-- circular formatting toolbar: B I H • list • link • callout, with separators -->
+  <g>
+    <!-- group 1: B I -->
+    <circle cx="52" cy="84" r="20" class="tool"/>
+    <text x="52" y="90" text-anchor="middle" class="glyph" font-size="16" font-weight="700">B</text>
+    <circle cx="98" cy="84" r="20" class="tool"/>
+    <text x="98" y="90" text-anchor="middle" class="glyph" font-size="16" font-weight="600" font-style="italic">I</text>
+    <line x1="126" y1="70" x2="126" y2="98" stroke="#e6e6e9" stroke-width="1"/>
+    <!-- group 2: H, list -->
+    <circle cx="154" cy="84" r="20" class="tool"/>
+    <text x="154" y="90" text-anchor="middle" class="glyph" font-size="15" font-weight="700">H</text>
+    <circle cx="200" cy="84" r="20" class="tool"/>
+    <g stroke="#1d1d1f" stroke-width="2" stroke-linecap="round"><line x1="194" y1="80" x2="206" y2="80"/><line x1="194" y1="88" x2="206" y2="88"/></g>
+    <line x1="228" y1="70" x2="228" y2="98" stroke="#e6e6e9" stroke-width="1"/>
+    <!-- group 3: link, callout -->
+    <circle cx="256" cy="84" r="20" class="tool"/>
+    <g stroke="#1d1d1f" stroke-width="2" fill="none" stroke-linecap="round"><path d="M251 84a5 5 0 0 1 5-5h3"/><path d="M261 84a5 5 0 0 1-5 5h-3"/></g>
+    <circle cx="302" cy="84" r="20" class="tool"/>
+    <text x="302" y="89" text-anchor="middle" class="glyph" font-size="15" font-weight="700">!</text>
+    <!-- "active" pulse ring that travels B -> I to show selection applying -->
+    <circle cy="84" r="20" fill="none" stroke="#3f94ba" stroke-width="2.5">
+      <animate attributeName="cx" dur="8s" repeatCount="indefinite" calcMode="spline" keyTimes="0;0.18;0.30;0.48;1" values="52;52;98;98;98" keySplines="0.4 0 0.2 1;0.4 0 0.2 1;0.4 0 0.2 1;0 0 1 1"/>
+      <animate attributeName="opacity" dur="8s" repeatCount="indefinite" calcMode="linear" keyTimes="0;0.05;0.52;0.6;1" values="0;1;1;0;0"/>
+    </circle>
+  </g>
+
+  <!-- body text being composed -->
+  <!-- line 1: heading that autoformats from "## " -->
+  <text x="34" y="136" class="muted" font-size="13" font-family="ui-monospace,Menlo,monospace">## <tspan class="muted">Release notes</tspan><animate attributeName="opacity" dur="8s" repeatCount="indefinite" calcMode="discrete" keyTimes="0;0.62;0.66" values="1;1;0"/></text>
+  <text x="34" y="138" class="body" font-size="20" font-weight="700" opacity="0">Release notes<animate attributeName="opacity" dur="8s" repeatCount="indefinite" calcMode="discrete" keyTimes="0;0.66;1" values="0;1;1"/></text>
+
+  <!-- line 2: a sentence with bold + italic applied as the ring lands -->
+  <text x="34" y="168" class="body">Ships <tspan font-weight="700">bold</tspan> and <tspan font-style="italic">italic</tspan> inline — no raw Markdown.</text>
+
+  <!-- callout block (info, accent left bar) that materializes -->
+  <g opacity="0">
+    <animate attributeName="opacity" dur="8s" repeatCount="indefinite" calcMode="spline" keyTimes="0;0.74;0.82;1" values="0;0;1;1" keySplines="0 0 1 1;0.34 1.45 0.64 1;0 0 1 1"/>
+    <rect x="34" y="184" width="690" height="30" rx="8" fill="#eef5f9"/>
+    <rect x="34" y="184" width="4" height="30" rx="2" fill="#3f94ba"/>
+    <text x="50" y="203" class="body" font-size="13.5"><tspan fill="#3f94ba" font-weight="700">ℹ NOTE</tspan>  <tspan class="muted">Every save is snapshotted and recoverable.</tspan></text>
+  </g>
+
+  <!-- caret blinking in the body -->
+  <rect y="156" width="1.6" height="16" rx="0.8" fill="#3f94ba">
+    <animate attributeName="x" dur="8s" repeatCount="indefinite" calcMode="discrete" keyTimes="0;0.66;0.74" values="78;360;360"/>
+    <animate attributeName="opacity" dur="1.06s" repeatCount="indefinite" calcMode="discrete" keyTimes="0;0.5" values="1;0"/>
+  </rect>
+</svg>

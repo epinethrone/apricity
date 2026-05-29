@@ -72,6 +72,17 @@ It is *not* a memory system of its own — it reads and writes an existing MemPa
 - **URL state** — the current wing / room / memory / query / sort survive reloads and are linkable.
 
 ### Write & edit
+
+<div align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/apricity-editor-dark.svg" />
+    <source media="(prefers-color-scheme: light)" srcset="assets/apricity-editor-light.svg" />
+    <img alt="Apricity's inline editor: a circular formatting toolbar applying bold and italic, a Markdown heading autoformatting, and a callout block" src="assets/apricity-editor-light.svg" width="660" />
+  </picture>
+  <br />
+  <sub>The inline WYSIWYG editor — circular toolbar, live bold/italic, <code>## </code> → heading autoformat, and callouts. No modal, no raw-Markdown round-trip.</sub>
+</div>
+
 - **Inline visual editor** — a WYSIWYG editor for bold/italic, headings, lists, links, and callouts, with Markdown autoformatting and HTML→Markdown conversion on save. No modal, no raw-Markdown round-trip.
 - **Edit metadata** — change content, title, wing, and room, or move a memory between rooms, with content-hash ETag protection against concurrent edits.
 - **Optimistic saves** — edits apply instantly and revert automatically (with a notification and a retry affordance) if the server rejects them.
