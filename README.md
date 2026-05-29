@@ -122,6 +122,17 @@ It is *not* a memory system of its own — it reads and writes an existing MemPa
 - **Live polling** — optional background refresh (15 / 30 / 60 s) that pauses when the tab is hidden, with an optional sound and LAN-wide "seen" sync so dismissing on one device clears it everywhere.
 
 ### Make it yours
+
+<div align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/apricity-theme-dark.svg" />
+    <source media="(prefers-color-scheme: light)" srcset="assets/apricity-theme-light.svg" />
+    <img alt="Apricity's Auto / Light / Dark theme switcher morphing a miniature interface between light and dark" src="assets/apricity-theme-light.svg" width="660" />
+  </picture>
+  <br />
+  <sub>Auto / Light / Dark — follow the system or pick a side; your choice is persisted.</sub>
+</div>
+
 - **Tools panel** — a power-user sheet that surfaces MemPalace's MCP tools: knowledge-graph query + timeline, tunnels (list, create, delete, find, follow, traverse), diary (read / write), stats, and maintenance (taxonomy, duplicate check, hook settings, sync, reconnect, AAAK spec). Hidden by default; enable it in Settings. See the [API reference](#api-reference) for the underlying endpoints.
 - **Settings** — a redesigned sheet with sidebar navigation covering Display (theme, reduce-motion, relative time, title/name polishing, panel-control reveal), Account, Notifications, remappable keyboard Shortcuts, and an About pane with an update-available check.
 - **Theme** — Auto / Light / Dark, overriding or following the system preference, with your choice persisted.
