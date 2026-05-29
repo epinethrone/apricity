@@ -19,8 +19,8 @@
   </p>
 </div>
 
-<!-- TODO: replace with a fresh screenshot of the current Apricity UI (the image below predates the redesign). -->
-![Apricity — three-pane view of wings, rooms, memories, and the knowledge graph](https://github.com/user-attachments/assets/fb218c65-fa51-4613-aede-9ec033f76edc)
+<img width="1727" height="957" alt="Design" src="https://github.com/user-attachments/assets/37a0e30c-a853-47de-84bc-31a88394abb4" />
+
 
 ## What is Apricity?
 
