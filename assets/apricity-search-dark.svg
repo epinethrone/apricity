@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 80" width="760" height="80" role="img" aria-label="Apricity search bar: a rotating ring sweeps the border while a query is typed">
+  <title>Apricity search bar — rotating ring + live typing (dark)</title>
+  <defs>
+    <linearGradient id="ringBaseD" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#234464"/>
+      <stop offset="0.5" stop-color="#5ea8c8"/>
+      <stop offset="1" stop-color="#9dd7e8"/>
+    </linearGradient>
+    <filter id="bloomD" x="-30%" y="-60%" width="160%" height="220%">
+      <feGaussianBlur stdDeviation="3"/>
+    </filter>
+    <clipPath id="typeClipD">
+      <rect x="56" y="18" height="44" width="0">
+        <animate attributeName="width" dur="9s" repeatCount="indefinite" calcMode="linear"
+          keyTimes="0;0.07;0.34;0.67;0.78;1" values="0;0;140;140;0;0"/>
+      </rect>
+    </clipPath>
+  </defs>
+
+  <!-- search pill -->
+  <rect x="16" y="18" width="728" height="44" rx="14" fill="#1c1c1e" stroke="#38383b" stroke-width="1"/>
+
+  <!-- rotating ring: faint base, blurred bloom comet, sharp comet -->
+  <path d="M30 16 H730 A16 16 0 0 1 746 32 V48 A16 16 0 0 1 730 64 H30 A16 16 0 0 1 14 48 V32 A16 16 0 0 1 30 16 Z"
+        pathLength="1500" fill="none" stroke="url(#ringBaseD)" stroke-width="2" opacity="0.5"/>
+  <path d="M30 16 H730 A16 16 0 0 1 746 32 V48 A16 16 0 0 1 730 64 H30 A16 16 0 0 1 14 48 V32 A16 16 0 0 1 30 16 Z"
+        pathLength="1500" fill="none" stroke="#9dd7e8" stroke-width="7" stroke-linecap="round"
+        stroke-dasharray="150 1350" opacity="0.6" filter="url(#bloomD)">
+    <animate attributeName="stroke-dashoffset" from="1500" to="0" dur="15s" repeatCount="indefinite"/>
+  </path>
+  <path d="M30 16 H730 A16 16 0 0 1 746 32 V48 A16 16 0 0 1 730 64 H30 A16 16 0 0 1 14 48 V32 A16 16 0 0 1 30 16 Z"
+        pathLength="1500" fill="none" stroke="#dcfcfe" stroke-width="2.5" stroke-linecap="round"
+        stroke-dasharray="120 1380">
+    <animate attributeName="stroke-dashoffset" from="1500" to="0" dur="15s" repeatCount="indefinite"/>
+  </path>
+
+  <!-- magnifier icon -->
+  <g stroke="#8e8e93" stroke-width="2" fill="none" stroke-linecap="round">
+    <circle cx="34" cy="37" r="6.5"/>
+    <line x1="38.8" y1="41.8" x2="43" y2="46"/>
+  </g>
+
+  <!-- placeholder (fades out while typing) -->
+  <text x="58" y="45" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="16.5" fill="#8e8e93">Search memories, facts, paths…<animate attributeName="opacity" dur="9s" repeatCount="indefinite" calcMode="linear" keyTimes="0;0.07;0.13;0.83;1" values="1;1;0;0;1"/></text>
+
+  <!-- typed query, revealed left-to-right -->
+  <g clip-path="url(#typeClipD)">
+    <text x="58" y="45" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="16.5" fill="#f5f5f7">knowledge graph</text>
+  </g>
+
+  <!-- caret: tracks the typing, blinks -->
+  <rect y="30" width="1.6" height="20" rx="0.8" fill="#3f94ba">
+    <animate attributeName="x" dur="9s" repeatCount="indefinite" calcMode="linear" keyTimes="0;0.07;0.34;0.67;0.78;1" values="58;58;184;184;58;58"/>
+    <animate attributeName="opacity" dur="1.06s" repeatCount="indefinite" calcMode="discrete" keyTimes="0;0.5" values="1;0"/>
+  </rect>
+
+  <!-- ⌘K hint -->
+  <rect x="686" y="27" width="46" height="26" rx="8" fill="#2c2c2e"/>
+  <text x="709" y="44" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="12.5" fill="#8e8e93">⌘K</text>
+</svg>

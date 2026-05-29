@@ -54,9 +54,19 @@ It is *not* a memory system of its own — it reads and writes an existing MemPa
 
 ## Features
 
+<div align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/apricity-search-dark.svg" />
+    <source media="(prefers-color-scheme: light)" srcset="assets/apricity-search-light.svg" />
+    <img alt="Apricity's search bar: a rotating ring sweeps the border while a query is typed in" src="assets/apricity-search-light.svg" width="660" />
+  </picture>
+  <br />
+  <sub>The search bar's always-on rotating ring — Apricity's “alive and listening” affordance. <code>⌘K</code> from anywhere.</sub>
+</div>
+
 ### Browse & navigate
+- **Search** across content and metadata, **filter** by author, and **sort** by date or title (with a configurable default). `⌘K` focuses it from anywhere; `Enter` jumps to the first match.
 - **Three panes** — a Rooms sidebar (wings → rooms, iOS-style drill-down), a Memories list, and a Detail view.
-- **Search** across content and metadata, **filter** by author, and **sort** by date or title (with a configurable default).
 - **Browse mode** — maximize the Memories panel into an adaptive multi-column grid; toggle with `F`.
 - **Wiki-style links** — `[[drawer_id|Display Title]]` references in memory content become clickable jumps to the linked memory, with one-click back-navigation.
 - **URL state** — the current wing / room / memory / query / sort survive reloads and are linkable.
