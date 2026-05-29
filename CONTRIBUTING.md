@@ -1,6 +1,6 @@
-# Contributing to MemPalace Dashboard
+# Contributing to Apricity
 
-Thanks for considering a contribution. This document describes how the project is structured, how to run it during development, and the conventions PRs are expected to follow.
+Thanks for considering a contribution. Apricity is the local front-end for [MemPalace](https://github.com/MemPalace/mempalace). This document describes how the project is structured, how to run it during development, and the conventions PRs are expected to follow.
 
 ## Project values
 
@@ -14,8 +14,8 @@ These shape what gets accepted and what doesn't:
 ## Getting set up
 
 ```bash
-git clone https://github.com/epinethrone/mempalace-frontend
-cd mempalace-frontend
+git clone https://github.com/epinethrone/apricity
+cd apricity
 python3 server.py
 ```
 
@@ -40,7 +40,7 @@ There is no `requirements.txt`, no virtualenv, no compile step. If your change i
 │       ├── styles.css          # All styling. CSS custom properties drive the theme.
 │       └── *.png / *.ico       # Logo and favicons.
 ├── server.py                   # Compatibility shim — keeps `python3 server.py` working from a clone.
-├── pyproject.toml              # Packaging metadata and the `mempalace-dashboard` console script.
+├── pyproject.toml              # Packaging metadata and the `apricity` console script.
 ├── .env.example                # Documented environment variables.
 ├── .github/                    # Issue templates, PR template, CI + release workflows.
 ├── README.md                   # User-facing docs.

@@ -1,11 +1,11 @@
 blank_issues_enabled: false
 contact_links:
   - name: Security vulnerability
-    url: https://github.com/epinethrone/mempalace-frontend/security/advisories/new
+    url: https://github.com/epinethrone/apricity/security/advisories/new
     about: Please use a private security advisory instead of a public issue. See SECURITY.md.
   - name: MemPalace itself (the memory system)
     url: https://github.com/MemPalace/mempalace/issues
     about: This repository is the dashboard. For bugs in the underlying MemPalace package, file there.
   - name: Question or discussion
-    url: https://github.com/epinethrone/mempalace-frontend/discussions
+    url: https://github.com/epinethrone/apricity/discussions
     about: Open-ended questions, ideas, and "is this a bug?" go in Discussions.

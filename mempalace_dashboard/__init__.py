@@ -1,4 +1,4 @@
-"""MemPalace Dashboard — a local web UI for a MemPalace personal-memory store."""
+"""Apricity — a local web UI / front-end for the MemPalace personal-memory system."""
 
 __version__ = "0.6.0"
 

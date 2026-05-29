@@ -3,14 +3,15 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "mempalace-dashboard"
+name = "apricity"
 version = "0.6.0"
-description = "A local, zero-dependency web UI for browsing, editing, and curating a MemPalace personal-memory store."
+description = "Apricity — a local, zero-dependency front-end for the MemPalace personal-memory system. Browse, search, edit, and curate your memories and knowledge graph from your browser."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }
-authors = [{ name = "MemPalace Dashboard contributors" }]
+authors = [{ name = "Apricity contributors" }]
 keywords = [
+    "apricity",
     "mempalace",
     "ai-memory",
     "knowledge-graph",
@@ -41,14 +42,18 @@ classifiers = [
 dependencies = []
 
 [project.urls]
-Homepage      = "https://github.com/epinethrone/mempalace-frontend"
-Repository    = "https://github.com/epinethrone/mempalace-frontend"
-Issues        = "https://github.com/epinethrone/mempalace-frontend/issues"
-Changelog     = "https://github.com/epinethrone/mempalace-frontend/blob/main/CHANGELOG.md"
-"Bug Tracker" = "https://github.com/epinethrone/mempalace-frontend/issues"
-"Source"      = "https://github.com/epinethrone/mempalace-frontend"
+Homepage      = "https://github.com/epinethrone/apricity"
+Repository    = "https://github.com/epinethrone/apricity"
+Issues        = "https://github.com/epinethrone/apricity/issues"
+Changelog     = "https://github.com/epinethrone/apricity/blob/main/CHANGELOG.md"
+"Bug Tracker" = "https://github.com/epinethrone/apricity/issues"
+"Source"      = "https://github.com/epinethrone/apricity"
 
 [project.scripts]
+apricity = "mempalace_dashboard.server:main"
+# Deprecated alias — keeps existing `mempalace-dashboard` launchers and
+# service units working after the rename to Apricity. Slated for removal
+# in a future major version.
 mempalace-dashboard = "mempalace_dashboard.server:main"
 
 [tool.setuptools.packages.find]

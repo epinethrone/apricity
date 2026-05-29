@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to MemPalace Dashboard are recorded here.
+All notable changes to Apricity (formerly "MemPalace Dashboard") are recorded here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it tags a `v1.0.0`.
 
@@ -19,6 +19,7 @@ batch is the "Apricity" baseline pushed as a known-good recovery point.
 - **Optimistic edit/delete/restore** with revert-on-failure + failed-save notification, retry button, and a red `.is-failed` card tint.
 
 ### Changed
+- **Renamed to Apricity.** The distribution is now `apricity` (`pipx install apricity`, `apricity` command); `mempalace-dashboard` is kept as a deprecated console-script alias so existing launchers keep working. The repo moved to `epinethrone/apricity`; all `pyproject` URLs, the GitHub release-check endpoint, `README.md`, and `CONTRIBUTING.md` were rewritten to match and to frame Apricity as a front-end for MemPalace. The Python import package stays `mempalace_dashboard` for now.
 - **Tunnel detail redesign.** Endpoint cards stack vertically with a graph-edge connector; "Open memory" moved to a compact header link rendered only for drawer-bound endpoints.
 - **Tunnel-bind indicator.** Replaced the cramped "TUNNELS" meta cell with a floating chip (linked-memory title + glyph, opens the linked memory) plus a low-opacity graph-edge watermark in the meta strip; edit mode adds an inline unbind ×.
 - **Versioned static assets cached `immutable`**; HTML + API stay `no-store`. Fixes the blank-content flash on every refresh.
@@ -186,17 +187,17 @@ batch is the "Apricity" baseline pushed as a known-good recovery point.
 - URL state for current wing / room / drawer / query / sort.
 - Keyboard shortcuts (`⌘K`, `Esc`, `R`).
 
-[Unreleased]: https://github.com/epinethrone/mempalace-frontend/compare/v0.6.0...HEAD
-[0.6.0]: https://github.com/epinethrone/mempalace-frontend/compare/v0.5.1...v0.6.0
-[0.5.1]: https://github.com/epinethrone/mempalace-frontend/compare/v0.5.0...v0.5.1
-[0.5.0]: https://github.com/epinethrone/mempalace-frontend/compare/v0.4.2...v0.5.0
-[0.4.2]: https://github.com/epinethrone/mempalace-frontend/compare/v0.4.1...v0.4.2
-[0.4.1]: https://github.com/epinethrone/mempalace-frontend/compare/v0.4.0...v0.4.1
-[0.4.0]: https://github.com/epinethrone/mempalace-frontend/compare/v0.3.3...v0.4.0
-[0.3.3]: https://github.com/epinethrone/mempalace-frontend/compare/v0.3.2...v0.3.3
-[0.3.2]: https://github.com/epinethrone/mempalace-frontend/compare/v0.3.1...v0.3.2
-[0.3.1]: https://github.com/epinethrone/mempalace-frontend/compare/v0.3.0...v0.3.1
-[0.3.0]: https://github.com/epinethrone/mempalace-frontend/compare/v0.2.0...v0.3.0
-[0.2.0]: https://github.com/epinethrone/mempalace-frontend/compare/v0.1.1...v0.2.0
-[0.1.1]: https://github.com/epinethrone/mempalace-frontend/compare/v0.1.0...v0.1.1
-[0.1.0]: https://github.com/epinethrone/mempalace-frontend/releases/tag/v0.1.0
+[Unreleased]: https://github.com/epinethrone/apricity/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/epinethrone/apricity/compare/v0.5.1...v0.6.0
+[0.5.1]: https://github.com/epinethrone/apricity/compare/v0.5.0...v0.5.1
+[0.5.0]: https://github.com/epinethrone/apricity/compare/v0.4.2...v0.5.0
+[0.4.2]: https://github.com/epinethrone/apricity/compare/v0.4.1...v0.4.2
+[0.4.1]: https://github.com/epinethrone/apricity/compare/v0.4.0...v0.4.1
+[0.4.0]: https://github.com/epinethrone/apricity/compare/v0.3.3...v0.4.0
+[0.3.3]: https://github.com/epinethrone/apricity/compare/v0.3.2...v0.3.3
+[0.3.2]: https://github.com/epinethrone/apricity/compare/v0.3.1...v0.3.2
+[0.3.1]: https://github.com/epinethrone/apricity/compare/v0.3.0...v0.3.1
+[0.3.0]: https://github.com/epinethrone/apricity/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/epinethrone/apricity/compare/v0.1.1...v0.2.0
+[0.1.1]: https://github.com/epinethrone/apricity/compare/v0.1.0...v0.1.1
+[0.1.0]: https://github.com/epinethrone/apricity/releases/tag/v0.1.0

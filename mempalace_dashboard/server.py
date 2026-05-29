@@ -153,7 +153,7 @@ PREFERENCES_FILE = _env_path("MEMPALACE_PREFERENCES", MEMPALACE_HOME / "dashboar
 # metadata — never a hardcoded string in the UI. Reading via
 # importlib.metadata means the About pane automatically reflects
 # whatever pyproject.toml says when the package was built, which
-# updates whenever the user runs `pipx upgrade mempalace-dashboard`.
+# updates whenever the user runs `pipx upgrade apricity`.
 # No manual HTML edit per release.
 #
 # Latest-available comparison goes one step further: we fetch the
@@ -165,20 +165,26 @@ _GITHUB_LATEST_CACHE: dict = {"version": None, "fetched_at": 0.0}
 _GITHUB_LATEST_TTL = 1800  # 30 minutes
 _GITHUB_LATEST_BACKOFF = 60  # On failure, wait this long before retrying
 _GITHUB_LATEST_URL = (
-    "https://api.github.com/repos/epinethrone/mempalace-frontend/releases/latest"
+    "https://api.github.com/repos/epinethrone/apricity/releases/latest"
 )
 
 
 def get_installed_version() -> str:
-    """Return the installed mempalace-dashboard package version, or
-    'unknown' if metadata isn't available (running from a non-
-    installed checkout, etc.). Cached for the life of the process —
-    a different installed version means a different Python process."""
+    """Return the installed Apricity package version, or 'unknown' if
+    metadata isn't available (running from a non-installed checkout,
+    etc.). Tries the current dist name ('apricity') first, then the
+    legacy 'mempalace-dashboard' name for installs that predate the
+    rename. Cached for the life of the process — a different installed
+    version means a different Python process."""
     global _VERSION_INSTALLED
     if _VERSION_INSTALLED is None:
-        try:
-            _VERSION_INSTALLED = importlib.metadata.version("mempalace-dashboard")
-        except importlib.metadata.PackageNotFoundError:
+        for _dist in ("apricity", "mempalace-dashboard"):
+            try:
+                _VERSION_INSTALLED = importlib.metadata.version(_dist)
+                break
+            except importlib.metadata.PackageNotFoundError:
+                continue
+        else:
             _VERSION_INSTALLED = "unknown"
     return _VERSION_INSTALLED
 
@@ -225,7 +231,7 @@ def get_version_info() -> dict:
     return {
         "installed": get_installed_version(),
         "latest_github": get_latest_github_version(),
-        "releases_url": "https://github.com/epinethrone/mempalace-frontend/releases",
+        "releases_url": "https://github.com/epinethrone/apricity/releases",
     }
 SESSION_COOKIE = "mempalace_session"
 SESSION_DURATION_SHORT = timedelta(hours=12)
@@ -514,7 +520,7 @@ def get_system_info() -> dict:
     kg_bytes = _file_size(KG_DB)
     uptime = datetime.now() - SERVER_STARTED_AT
     return {
-        "repo_url": "https://github.com/epinethrone/mempalace-frontend",
+        "repo_url": "https://github.com/epinethrone/apricity",
         "host": {
             "name": uname.node,
             "os": uname.system,
