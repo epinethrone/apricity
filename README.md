@@ -89,6 +89,17 @@ It is *not* a memory system of its own — it reads and writes an existing MemPa
 - **Drafts inbox** — stage partial memories, edit them in place, and file them into the palace when ready.
 
 ### Curate & recover
+
+<div align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/apricity-recover-dark.svg" />
+    <source media="(prefers-color-scheme: light)" srcset="assets/apricity-recover-light.svg" />
+    <img alt="Apricity's delete-and-recover flow: a memory card slides from Memories into Recently deleted, gains a Restore button, then slides back" src="assets/apricity-recover-light.svg" width="660" />
+  </picture>
+  <br />
+  <sub>Nothing is ever lost — every delete is snapshotted into <strong>Recently deleted</strong>, one click from restore.</sub>
+</div>
+
 - **Delete** a single memory, a whole room, or a whole wing — every delete is snapshotted to a recoverable log.
 - **Recently deleted** — restore a deleted memory with one click (optimistically), or purge the log.
 - **Knowledge graph** — view triples, add new facts, invalidate stale ones, and explore a force-directed graph visualisation.
