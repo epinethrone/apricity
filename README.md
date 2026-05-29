@@ -65,6 +65,7 @@ It is *not* a memory system of its own — it reads and writes an existing MemPa
   <sub>The search bar's always-on rotating ring — Apricity's “alive and listening” affordance. <code>⌘K</code> from anywhere.</sub>
 </div>
 
+
 - **Search** across content and metadata, **filter** by author, and **sort** by date or title (with a configurable default). `⌘K` focuses it from anywhere; `Enter` jumps to the first match.
 - **Three panes** — a Rooms sidebar (wings → rooms, iOS-style drill-down), a Memories list, and a Detail view.
 - **Browse mode** — maximize the Memories panel into an adaptive multi-column grid; toggle with `F`.
