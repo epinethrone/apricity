@@ -32,7 +32,7 @@ It is *not* a memory system of its own — it reads and writes an existing MemPa
 - 🪶 **Zero runtime dependencies.** Pure-Python standard-library server + plain HTML / CSS / vanilla JS front-end. No `pip install`, no `npm`, no Docker, no build step.
 - 🛡️ **Safe by construction.** Every write goes through the official `mempalace` Python package. Every destructive action is snapshotted and recoverable. ETag concurrency control prevents lost edits.
 - ⚡ **Fast.** Reads the SQLite/Chroma backends directly; a localStorage cache, gzip, and serve-time minification make reloads feel instant.
-- ⌨️ **Keyboard-driven.** `⌘K` to search, `E` to edit, `F` to browse, `R` to reload — and every shortcut is remappable.
+- ⌨️ **Keyboard-driven.** `⌘K` to search, `E` to edit, `F` to maximize/browse — core actions are remappable.
 
 > ⚠️ Apricity expects an installed and initialised MemPalace instance on the same machine. It does **not** ship MemPalace itself — install it first from [MemPalace/mempalace](https://github.com/MemPalace/mempalace).
 
@@ -134,7 +134,7 @@ It is *not* a memory system of its own — it reads and writes an existing MemPa
 </div>
 
 - **Tools panel** — a power-user sheet that surfaces MemPalace's MCP tools: knowledge-graph query + timeline, tunnels (list, create, delete, find, follow, traverse), diary (read / write), stats, and maintenance (taxonomy, duplicate check, hook settings, sync, reconnect, AAAK spec). Hidden by default; enable it in Settings. See the [API reference](#api-reference) for the underlying endpoints.
-- **Settings** — a redesigned sheet with sidebar navigation covering Display (theme, reduce-motion, relative time, title/name polishing, panel-control reveal), Account, Notifications, remappable keyboard Shortcuts, and an About pane with an update-available check.
+- **Settings** — a redesigned sheet with sidebar navigation: Display (theme, reduce-motion, relative time, title/name polishing, panel-control reveal), Notifications, remappable keyboard Shortcuts, Trash, Backup, Account, and an About pane with an update-available check.
 - **Theme** — Auto / Light / Dark, overriding or following the system preference, with your choice persisted.
 - **Auth** — optional username + password lock with PBKDF2-SHA256 hashing and HTTP-only session cookies (12-hour default, 30-day "Remember me").
 
@@ -189,7 +189,7 @@ All filesystem locations default to the standard MemPalace home (`~/.mempalace`)
 | `MEMPALACE_PALACE_DB` | `<HOME>/palace/chroma.sqlite3` | The Chroma SQLite backend. |
 | `MEMPALACE_KG_DB` | `<HOME>/knowledge_graph.sqlite3` | The knowledge-graph SQLite database. |
 | `MEMPALACE_INBOX` | `<HOME>/dashboard-inbox` | Where drafts are staged before filing. |
-| `MEMPALACE_VERSIONS` | `<HOME>/dashboard-versions.jsonl` | Append-only log of deletes and edits (powers Recently deleted). |
+| `MEMPALACE_VERSIONS` | `<HOME>/dashboard-versions.jsonl` | Append-only log of deletions (powers Recently deleted). |
 | `MEMPALACE_CREDENTIALS` | `<HOME>/dashboard-credentials.json` | Username + PBKDF2 hash. Mode `0600`. |
 | `MEMPALACE_SESSIONS` | `<HOME>/dashboard-sessions.json` | Active session tokens. Mode `0600`. |
 | `MEMPALACE_PREFERENCES` | `<HOME>/dashboard-preferences.json` | Server-side UI preferences (sort, theme, notification settings). |
@@ -210,16 +210,19 @@ For scripted access, set `MEMPALACE_TOKEN=<some-secret>` in the environment and 
 
 ## Keyboard shortcuts
 
-Every shortcut is remappable under **Settings → Shortcuts**. The defaults:
+Four actions are **remappable** under **Settings → Shortcuts** (defaults shown); `⌘K` and `Esc` are fixed.
 
-| Shortcut | Action |
-|---|---|
-| `⌘K` / `Ctrl+K` | Focus the search box |
-| `Enter` (in search) | Jump to the first matching memory |
-| `E` | Edit the open memory (or maximize the detail panel) |
-| `F` | Toggle Browse mode (when no memory is selected) |
-| `R` | Reload palace data |
-| `Esc` | Close any open sheet (write, drafts, settings, login) |
+| Shortcut | Action | Remappable |
+|---|---|---|
+| `F` | Maximize / Browse mode | ✅ |
+| `E` | Edit the selected memory | ✅ |
+| `X` | Close / collapse the current panel or sheet | ✅ |
+| `Backspace` | Delete the focused item (with confirmation) | ✅ |
+| `⌘K` / `Ctrl+K` | Focus the search box (inserts a link inside the editor) | — |
+| `Esc` | Close any open sheet — permanent fallback for `X` | — |
+| `Enter` (in search) | Jump to the first matching memory | — |
+
+Single-key shortcuts only fire when you're not typing in a field. Full details in the [wiki](https://github.com/epinethrone/apricity/wiki/Keyboard-Shortcuts).
 
 ## API reference
 
@@ -233,7 +236,7 @@ All endpoints are JSON over HTTP. Auth is by session cookie (`mempalace_session`
 | `POST` | `/api/logout` | open | Clears the session. |
 | `GET`  | `/api/palace` | auth | Full palace snapshot (wings, drawers, triples, stats). |
 | `GET`  | `/api/search?q=…` | auth | Filtered subset of drawers + triples. |
-| `GET`  | `/api/versions` | auth | Recently deleted/edited snapshots. |
+| `GET`  | `/api/versions` | auth | Recently deleted snapshots (powers Recently deleted). |
 | `POST` | `/api/memories` | auth | File a new memory. |
 | `POST` | `/api/memories/update` | auth | Patch content / wing / room of an existing drawer; supports ETag. |
 | `POST` | `/api/delete` | auth | Delete a drawer, room, or wing (`{scope, …, confirm: "DELETE"}`). |
@@ -282,7 +285,7 @@ curl -X POST http://127.0.0.1:8765/api/memories \
 ## Safety model
 
 - **No raw DB writes.** Every mutation routes through the official `mempalace` Python package — Apricity never modifies SQLite directly.
-- **Snapshot before destruction.** Every delete and every metadata edit appends a record to the versions log so the content is recoverable.
+- **Snapshot before destruction.** Every delete (memory, room, wing, tunnel) appends a record to the versions log so the content is recoverable. Edits aren't snapshotted as history — they're protected from accidental overwrite by ETag concurrency instead.
 - **ETag concurrency.** The edit form sends the content hash it was opened with; the server refuses to overwrite if it has changed.
 - **Confirmation values.** Bulk deletes and snapshot wipes require an exact-string confirmation in the request body.
 - **No plaintext secrets.** Credentials are hashed with PBKDF2-HMAC-SHA256 (200 000 iterations, 16-byte salt). Sessions are stored server-side; cookies are `HttpOnly` + `SameSite=Lax`.

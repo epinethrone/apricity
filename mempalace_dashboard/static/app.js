@@ -1298,6 +1298,36 @@ function readPalaceCache() {
   }
 }
 
+// ---------- tunnels localStorage cache ----------
+// Same stale-while-revalidate rationale as the palace cache, but for the
+// SEPARATE /api/tunnels endpoint. The tunnel indicators — the graph-edge
+// watermark in the meta strip and the per-wing / per-room connection
+// counts — are driven by tunnel data. Without caching it, the instant boot
+// paint (which renders the cached palace before the network resolves) had
+// no tunnels, so those icons popped in visibly LATER when the tunnels
+// fetch landed. Caching the raw list lets the first paint draw them
+// immediately; the live fetch still overwrites + reconciles right after.
+const TUNNELS_CACHE_KEY = "apricity-tunnels-cache-v1";
+
+function writeTunnelsCache(items) {
+  try {
+    localStorage.setItem(TUNNELS_CACHE_KEY, JSON.stringify({ ts: Date.now(), items: items || [] }));
+  } catch {
+    // Storage unavailable — pure optimization, skip silently.
+  }
+}
+
+function readTunnelsCache() {
+  try {
+    const raw = localStorage.getItem(TUNNELS_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return parsed && Array.isArray(parsed.items) ? parsed.items : null;
+  } catch {
+    return null;
+  }
+}
+
 // ---------- seen-map localStorage cache ----------
 // The palace cache above is only rewritten on a full loadPalace fetch.
 // But the SEEN map (which drawers have had their "Updated" marker /
@@ -1410,6 +1440,19 @@ async function loadTunnels() {
     return;
   }
   const items = (raw && (raw.tunnels || raw.items || raw.results)) || [];
+  applyTunnelItems(items);
+  // Cache the raw list so the NEXT reload's instant cache-paint can draw
+  // the tunnel indicators immediately instead of popping them in late.
+  writeTunnelsCache(items);
+  state.tunnelsLoaded = true;
+  // Re-render so tunnel indicators appear once tunnels arrive.
+  if (state.palace) render();
+}
+
+// Build state.tunnels + the room-key index from a raw tunnel list. Shared
+// by loadTunnels (live fetch) and the boot cache-hydration path so both
+// produce an identical index from the same input.
+function applyTunnelItems(items) {
   state.tunnels = items;
   state.tunnelsByRoomKey = new Map();
   for (const t of items) {
@@ -1422,9 +1465,6 @@ async function loadTunnels() {
     pushMapList(state.tunnelsByRoomKey, sKey, { side: "outgoing", other: { wing: dWing, room: d.room }, tunnel: t });
     pushMapList(state.tunnelsByRoomKey, dKey, { side: "incoming", other: { wing: sWing, room: s.room }, tunnel: t });
   }
-  state.tunnelsLoaded = true;
-  // Re-render so tunnel indicators appear once tunnels arrive.
-  if (state.palace) render();
 }
 
 function pushMapList(map, key, value) {
@@ -1611,16 +1651,16 @@ async function loadSystemInfo() {
     ["Storage", `${formatBytes(info.db_bytes && info.db_bytes.total)} · port ${info.port}`],
     ["Uptime", formatUptime(info.uptime_seconds)],
   ];
-  els.footerInfo.innerHTML = cells
-    .map(
-      ([label, value]) => `
+  els.footerInfo.innerHTML = cells.map(([label, value]) => footerCellHtml(label, value)).join("");
+}
+
+function footerCellHtml(label, value) {
+  return `
       <div class="footer-cell">
         <span class="footer-cell-label">${escapeHtml(label)}</span>
         <span class="footer-cell-value">${escapeHtml(value)}</span>
       </div>
-    `,
-    )
-    .join("");
+    `;
 }
 
 function reconcileSelection() {
@@ -1638,8 +1678,36 @@ function reconcileSelection() {
     if (!roomExists) state.selectedRoom = "all";
   }
   if (state.selectedDrawerId) {
-    const exists = state.palace.drawers.some((d) => d.drawer_id === state.selectedDrawerId);
-    if (!exists) state.selectedDrawerId = null;
+    const drawers = state.palace.drawers || [];
+    const stillThere = drawers.some((d) => d.drawer_id === state.selectedDrawerId);
+    if (!stillThere) {
+      // The open drawer's id vanished. Before dropping the selection
+      // (which collapses the detail panel mid-read), try to re-locate the
+      // same memory: an agent updating it MCP-side re-files it under a
+      // fresh drawer_id but preserves filed_at. Match on that stable
+      // signature and re-point so a background update never closes the
+      // panel the user is actively viewing.
+      const sig = state._selectedDrawerSig;
+      let moved = null;
+      if (sig && sig.filed_at) {
+        const sameTime = drawers.filter((d) => d.filed_at === sig.filed_at);
+        moved = sameTime.find((d) => d.title === sig.title)
+          || (sameTime.length === 1 ? sameTime[0] : null);
+      }
+      if (moved) {
+        state.selectedDrawerId = moved.drawer_id;
+        state._selectedDrawerSig = {
+          filed_at: moved.filed_at,
+          title: moved.title,
+          wing: moved.wing,
+          room: moved.room,
+        };
+      } else {
+        // Genuinely gone (deleted) — only now clear the selection.
+        state.selectedDrawerId = null;
+        state._selectedDrawerSig = null;
+      }
+    }
   }
 }
 
@@ -1677,26 +1745,13 @@ function renderStats() {
     ["Rooms", stats.rooms],
     ["Facts", stats.facts],
   ];
-  els.statsInfo.innerHTML = items
-    .map(
-      ([label, value]) => `
-      <div class="footer-cell">
-        <span class="footer-cell-label">${escapeHtml(label)}</span>
-        <span class="footer-cell-value">${escapeHtml(String(value))}</span>
-      </div>
-    `,
-    )
-    .join("");
+  els.statsInfo.innerHTML = items.map(([label, value]) => footerCellHtml(label, String(value))).join("");
 }
 
 function dotMenu(menuId, label, items) {
   return `<div class="menu-wrap">
       <button class="menu-button compact" type="button" data-menu="${escapeHtml(menuId)}" aria-label="${escapeHtml(label)}" aria-haspopup="menu" aria-expanded="false">
-        <svg class="menu-dots" viewBox="0 0 16 16" aria-hidden="true">
-          <circle cx="3" cy="8" r="1.4"></circle>
-          <circle cx="8" cy="8" r="1.4"></circle>
-          <circle cx="13" cy="8" r="1.4"></circle>
-        </svg>
+        ${menuDotsIcon()}
       </button>
       <div class="action-menu hidden" role="menu" data-menu-panel="${escapeHtml(menuId)}">
         ${items.join("")}
@@ -1704,14 +1759,48 @@ function dotMenu(menuId, label, items) {
     </div>`;
 }
 
-function editMenuItem(drawerId) {
-  return `<button class="action-item edit-menu" role="menuitem" type="button" data-edit-drawer-id="${escapeHtml(drawerId)}">
-      <svg class="action-icon" viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M14.06 4.94a2.25 2.25 0 0 1 3.18 0l1.82 1.82a2.25 2.25 0 0 1 0 3.18L9.5 19.5l-4.5 1 1-4.5 8.06-11.06Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
-        <path d="m13 6 5 5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
-      </svg>
-      <span>Edit</span>
+const ICON_PATHS = Object.freeze({
+  edit: `<path d="M14.06 4.94a2.25 2.25 0 0 1 3.18 0l1.82 1.82a2.25 2.25 0 0 1 0 3.18L9.5 19.5l-4.5 1 1-4.5 8.06-11.06Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+        <path d="m13 6 5 5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>`,
+  editSimple: `<path d="M14.06 4.94a2.25 2.25 0 0 1 3.18 0l1.82 1.82a2.25 2.25 0 0 1 0 3.18L9.5 19.5l-4.5 1 1-4.5 8.06-11.06Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>`,
+  trash: `<path d="M5 7h14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" fill="none"/>
+        <path d="M10 7V5.5A1.5 1.5 0 0 1 11.5 4h1A1.5 1.5 0 0 1 14 5.5V7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" fill="none"/>
+        <path d="M7 7h10l-.9 11.2A1.8 1.8 0 0 1 14.3 20H9.7a1.8 1.8 0 0 1-1.8-1.8L7 7Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" fill="none"/>`,
+  trashLines: `<path d="M5 7h14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" fill="none"/>
+        <path d="M10 7V5.5A1.5 1.5 0 0 1 11.5 4h1A1.5 1.5 0 0 1 14 5.5V7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" fill="none"/>
+        <path d="M7 7h10l-.9 11.2A1.8 1.8 0 0 1 14.3 20H9.7a1.8 1.8 0 0 1-1.8-1.8L7 7Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" fill="none"/>
+        <path d="M10.5 10.5v6M13.5 10.5v6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>`,
+  check: `<path d="m5 12 5 5 9-11" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>`,
+  x: `<path d="m6 6 12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>`,
+});
+
+function svgIcon(name, className = "") {
+  const classAttr = className ? ` class="${className}"` : "";
+  return `<svg${classAttr} viewBox="0 0 24 24" aria-hidden="true">${ICON_PATHS[name]}</svg>`;
+}
+
+function menuDotsIcon() {
+  return `<svg class="menu-dots" viewBox="0 0 16 16" aria-hidden="true">
+          <circle cx="3" cy="8" r="1.4"></circle>
+          <circle cx="8" cy="8" r="1.4"></circle>
+          <circle cx="13" cy="8" r="1.4"></circle>
+        </svg>`;
+}
+
+function actionItem({ className, attrs, icon, label }) {
+  return `<button class="${escapeHtml(className)}" role="menuitem" type="button" ${attrs.join(" ")}>
+      ${svgIcon(icon, "action-icon")}
+      <span>${escapeHtml(label)}</span>
     </button>`;
+}
+
+function editMenuItem(drawerId) {
+  return actionItem({
+    className: "action-item edit-menu",
+    attrs: [`data-edit-drawer-id="${escapeHtml(drawerId)}"`],
+    icon: "edit",
+    label: "Edit",
+  });
 }
 
 function deleteMenuItem({ scope, drawerId, wing, room }) {
@@ -1719,59 +1808,52 @@ function deleteMenuItem({ scope, drawerId, wing, room }) {
   if (drawerId) attrs.push(`data-drawer-id="${escapeHtml(drawerId)}"`);
   if (wing) attrs.push(`data-wing="${escapeHtml(wing)}"`);
   if (room) attrs.push(`data-room="${escapeHtml(room)}"`);
-  return `<button class="action-item danger-menu" role="menuitem" type="button" ${attrs.join(" ")}>
-      <svg class="action-icon" viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M5 7h14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" fill="none"/>
-        <path d="M10 7V5.5A1.5 1.5 0 0 1 11.5 4h1A1.5 1.5 0 0 1 14 5.5V7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" fill="none"/>
-        <path d="M7 7h10l-.9 11.2A1.8 1.8 0 0 1 14.3 20H9.7a1.8 1.8 0 0 1-1.8-1.8L7 7Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" fill="none"/>
-        <path d="M10.5 10.5v6M13.5 10.5v6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
-      </svg>
-      <span>Delete</span>
-    </button>`;
+  return actionItem({
+    className: "action-item danger-menu",
+    attrs,
+    icon: "trashLines",
+    label: "Delete",
+  });
 }
 
 function editToggleButton({ id, label, active }) {
   return `<button class="edit-toggle ${active ? "active" : ""}" id="${escapeHtml(id)}" type="button" aria-pressed="${active ? "true" : "false"}" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}">
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M14.06 4.94a2.25 2.25 0 0 1 3.18 0l1.82 1.82a2.25 2.25 0 0 1 0 3.18L9.5 19.5l-4.5 1 1-4.5 8.06-11.06Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
-        <path d="m13 6 5 5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
-      </svg>
+      ${svgIcon("edit")}
     </button>`;
+}
+
+function rowActionButton({ className = "row-action", attrs, icon }) {
+  return `<button class="${escapeHtml(className)}" ${attrs.join(" ")}>
+        ${svgIcon(icon)}
+      </button>`;
 }
 
 function renameIconButton({ scope, wing, room }) {
   const attrs = [`data-rename-scope="${escapeHtml(scope)}"`];
   if (wing) attrs.push(`data-wing="${escapeHtml(wing)}"`);
   if (room) attrs.push(`data-room="${escapeHtml(room)}"`);
-  return `<button class="row-action" type="button" aria-label="Rename" title="Rename" ${attrs.join(" ")}>
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M14.06 4.94a2.25 2.25 0 0 1 3.18 0l1.82 1.82a2.25 2.25 0 0 1 0 3.18L9.5 19.5l-4.5 1 1-4.5 8.06-11.06Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
-      </svg>
-    </button>`;
+  return rowActionButton({
+    attrs: ["type=\"button\"", "aria-label=\"Rename\"", "title=\"Rename\"", ...attrs],
+    icon: "editSimple",
+  });
 }
 
 function deleteIconButton({ scope, wing, room }) {
   const attrs = [`data-delete-scope="${escapeHtml(scope)}"`];
   if (wing) attrs.push(`data-wing="${escapeHtml(wing)}"`);
   if (room) attrs.push(`data-room="${escapeHtml(room)}"`);
-  return `<button class="row-action danger" type="button" aria-label="Delete" title="Delete" ${attrs.join(" ")}>
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M5 7h14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" fill="none"/>
-        <path d="M10 7V5.5A1.5 1.5 0 0 1 11.5 4h1A1.5 1.5 0 0 1 14 5.5V7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" fill="none"/>
-        <path d="M7 7h10l-.9 11.2A1.8 1.8 0 0 1 14.3 20H9.7a1.8 1.8 0 0 1-1.8-1.8L7 7Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" fill="none"/>
-      </svg>
-    </button>`;
+  return rowActionButton({
+    className: "row-action danger",
+    attrs: ["type=\"button\"", "aria-label=\"Delete\"", "title=\"Delete\"", ...attrs],
+    icon: "trash",
+  });
 }
 
 function renameRow({ scope, currentName, label }) {
   return `<form class="rename-row" data-rename-form data-rename-scope="${escapeHtml(scope)}" data-current="${escapeHtml(currentName)}">
       <input class="rename-input" type="text" autocomplete="off" spellcheck="false" value="${escapeHtml(currentName)}" aria-label="${escapeHtml(label)}" required />
-      <button class="row-action accent" type="submit" aria-label="Save">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 5 5 9-11" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      </button>
-      <button class="row-action" type="button" data-rename-cancel aria-label="Cancel">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
-      </button>
+      ${rowActionButton({ className: "row-action accent", attrs: ["type=\"submit\"", "aria-label=\"Save\""], icon: "check" })}
+      ${rowActionButton({ attrs: ["type=\"button\"", "data-rename-cancel", "aria-label=\"Cancel\""], icon: "x" })}
     </form>`;
 }
 
@@ -2261,63 +2343,68 @@ function markDrawerSeen(drawerId) {
   _persistSeenToServer([drawerId]);
 }
 
-/** Position the tunnel-bind box just ABOVE the editor's WING pill.
- * The box is position:absolute relative to .detail-panel, while the
- * WING pill (.detail-editor-chips in edit mode) lives in the
- * scrolling .detail flow with its own offset — so a hardcoded CSS
- * `top` can't keep them adjacent across content sizes (that was the
- * big gap). Instead we measure WING's actual rendered top relative
- * to the panel and set the box's inline `top` so its bottom edge
- * sits ~16px above WING.
+/** Position the tunnel-bind card so its bottom edge sits ~16px ABOVE
+ * the editor's WING pill, and keep it glued there as the panel scrolls.
  *
- * View mode has no editor chips, so we derive WING's would-be flow
- * position from the meta strip's bottom + the chips' native 170px
- * top margin — yielding the SAME box position in view and edit, so
- * it never jumps when edit toggles. */
+ * The card is position:absolute relative to the NON-scrolling
+ * .detail-panel, while the WING/ROOM chips (.detail-editor-chips) are
+ * position:sticky inside the scrolling #detail. To sit "right above
+ * WING" wherever WING currently is, we measure the chips' live top and
+ * place the card's bottom just above it. Because the chips are sticky,
+ * their top changes as you scroll (riding up with content, then pinning
+ * at top:170) — so this MUST be re-run on scroll (see the listener in
+ * updateTunnelBindIndicator) or the card freezes at its scroll-top
+ * position while the chips ride up and the two cross. Tracking the
+ * chips means the card glides up with the content and locks the instant
+ * the chips pin, exactly mirroring the toolbar's own behaviour.
+ *
+ * No high `top` clamp: the card lives in the chip column (offset well
+ * to the right of the top-left close/maximize cluster), so even when
+ * the chips pin and the card tracks up near the panel top it never
+ * horizontally overlaps those buttons. A small 8px floor only stops a
+ * very tall multi-tunnel card from poking above the panel. */
 function positionTunnelInfo(info) {
   if (!info || info.classList.contains("hidden")) return;
   const panel = info.closest(".detail-panel");
   const detail = panel && panel.querySelector("#detail");
   if (!panel || !detail) return;
   const panelRect = panel.getBoundingClientRect();
-  const panelTop = panelRect.top;
-  const panelLeft = panelRect.left;
-  let wingTop;
-  let wingLeft = null;
-  const chips = detail.querySelector(".detail-editor-chips");
-  if (chips) {
-    const chipsRect = chips.getBoundingClientRect();
-    wingTop = chipsRect.top - panelTop;
-    // Horizontal symmetry: align the box's left edge with the
-    // WING/ROOM pill column's left edge so the box sits directly
-    // above the pills, not offset from them. Measured because the
-    // editor grid centres its column and the exact left depends on
-    // panel width / column gap — a static CSS value can't track it.
-    wingLeft = chipsRect.left - panelLeft;
-  } else {
-    const meta = detail.querySelector(".detail-meta");
-    wingTop = meta
-      ? (meta.getBoundingClientRect().bottom - panelTop) + 170
-      : 260;
-  }
   const boxH = info.offsetHeight || 120;
-  // 16px gap above WING; clamp so the box never rides up into the
-  // close/maximize cluster at the panel's top-left corner.
-  const top = Math.max(72, Math.round(wingTop - boxH - 16));
-  info.style.top = top + "px";
-  // Only override `left` when we measured the real pill column (edit
-  // mode). In view mode there's no pill to align to, so keep the CSS
-  // fallback `left` — and crucially, use the SAME value the editor
-  // pills will have, so the box doesn't shift horizontally when edit
-  // toggles. We stash the measured left on the element so a later
-  // view-mode render reuses it instead of snapping back to CSS.
-  if (wingLeft !== null) {
-    const clampedLeft = Math.max(24, Math.round(wingLeft));
-    info.style.left = clampedLeft + "px";
-    info._measuredLeft = clampedLeft;
-  } else if (typeof info._measuredLeft === "number") {
-    info.style.left = info._measuredLeft + "px";
+  // VERTICAL anchor — pinned, and identical in view AND edit mode. Use the
+  // meta band's RENDERED bottom (getBoundingClientRect). #detail has NO
+  // padding, so the sticky meta sits flush at the panel top and its
+  // rendered bottom is a CONSTANT (~78px) at rest AND scrolled — the box
+  // never moves. Do NOT use meta.offsetTop: for a position:sticky element
+  // WebKit returns natural + sticky displacement, which GROWS with scroll
+  // and slid the box right off the bottom of the panel. (An earlier
+  // view/edit "snap" that this offsetTop swap was meant to fix was really
+  // the chips being pinned at the wrong 288 — now fixed at 240 in CSS — so
+  // getBoundingClientRect is correct here and does not snap.) box bottom =
+  // metaBottom + 170 − 16 ≈ 232, sitting the box ~8px above the chip
+  // column pinned at 240. Keep +170 / −16 in sync with the chips'
+  // top(240)/margin-top(162) in styles.css.
+  const meta = detail.querySelector(".detail-meta");
+  const metaBottom = meta ? (meta.getBoundingClientRect().bottom - panelRect.top) : 78;
+  const wingTop = metaBottom + 170;
+  info.style.top = Math.max(8, Math.round(wingTop - boxH - 16)) + "px";
+  // HORIZONTAL — copy the editor chip column's exact left edge so the box
+  // and the pills share one left rail (perfectly symmetric). In EDIT mode
+  // just measure the chips directly — no geometry guessing (an earlier
+  // bodyLeft−226 estimate ignored the column's margin-right:24 and landed
+  // the box ~24px too far right). In VIEW mode the chips don't exist, so
+  // reproduce their left from the centred body: the column is right-
+  // aligned in the left gutter against the 760px body, offset by the grid
+  // column-gap(16) + its margin-right(24) + its width(210) = 250. The body
+  // is centred at the SAME left in both modes, so view matches edit.
+  const chips = detail.querySelector(".detail-editor-chips");
+  let left;
+  if (chips) {
+    left = chips.getBoundingClientRect().left - panelRect.left;
+  } else {
+    const body = detail.querySelector(".markdown");
+    left = body ? (body.getBoundingClientRect().left - panelRect.left - 250) : 48;
   }
+  info.style.left = Math.max(24, Math.round(left)) + "px";
 }
 
 /** Update the floating tunnel-bind indicator (chip + watermark)
@@ -2404,6 +2491,25 @@ function updateTunnelBindIndicator(drawer, drawerTunnels) {
   // first paint where layout may not have fully settled.
   positionTunnelInfo(info);
   requestAnimationFrame(() => positionTunnelInfo(info));
+  // The card tracks the sticky chips' live position, so it must be
+  // re-placed as the panel scrolls — otherwise it freezes at its
+  // scroll-top spot while the chips ride up to pin, and the two cross.
+  // One rAF-throttled scroll listener wired once for the life of the
+  // page (els.detail persists across renders), same pattern the
+  // virtual drawer list uses.
+  if (!state._tunnelScrollWired && els.detail) {
+    state._tunnelScrollWired = true;
+    let tunnelRafPending = false;
+    els.detail.addEventListener("scroll", () => {
+      if (tunnelRafPending) return;
+      tunnelRafPending = true;
+      requestAnimationFrame(() => {
+        tunnelRafPending = false;
+        const cur = document.querySelector("#detailPanelTunnelInfo");
+        if (cur && !cur.classList.contains("hidden")) positionTunnelInfo(cur);
+      });
+    }, { passive: true });
+  }
   // Chip click → jump straight to the linked memory (or back to the
   // tunnel inspector if the other side is unbound / not findable).
   info.querySelectorAll("[data-linked-drawer-id]").forEach((chip) => {
@@ -2465,6 +2571,89 @@ function updateTunnelBindIndicator(drawer, drawerTunnels) {
       }
     });
   });
+}
+
+function drawerMetadataCellHtml(cell, idx) {
+  // The Drawer cell's value is itself the copy-ID affordance —
+  // click the hash to copy the full id. Hover + cursor + accent
+  // color signal interactivity; the title turns into an explicit
+  // "Click to copy" hint instead of just showing the full id.
+  const isDrawerCell = idx === 0;
+  const strongClass = [
+    cell.changed ? "value-changed" : "",
+    isDrawerCell ? "drawer-id-copy" : "",
+    cell.recent ? "meta-recent" : "",
+  ].filter(Boolean).join(" ");
+  const titleAttr = isDrawerCell
+    ? `Click to copy: ${escapeHtml(cell.full)}`
+    : escapeHtml(cell.full);
+  const dataAttr = isDrawerCell
+    ? `data-copy-drawer-id="${escapeHtml(cell.full)}"`
+    : "";
+  // Drawer cell renders BOTH the short hash suffix and the full
+  // id in nested spans; CSS shows one based on the enlarged
+  // state of the panel (.content-grid.detail-enlarged swaps to
+  // the full id since the metadata bar has plenty of horizontal
+  // room then). The full-form DISPLAY strips the `drawer_`
+  // prefix — redundant with the "DRAWER" label directly above —
+  // but the data-copy-drawer-id attribute keeps the full
+  // unmodified id for the click-to-copy action.
+  const fullDisplay = isDrawerCell
+    ? (cell.full || "").replace(/^drawer_/, "")
+    : cell.full;
+  // Tunnels cell prefixes its count with the graph-edge glyph so
+  // the link semantic is immediately legible even at a glance.
+  let valueHtml;
+  if (isDrawerCell) {
+    valueHtml = `<span class="drawer-id-short">${escapeHtml(cell.display)}</span><span class="drawer-id-full">${escapeHtml(fullDisplay)}</span>`;
+  } else if (cell.tunnels) {
+    valueHtml = `<span class="meta-tunnel-glyph" aria-hidden="true">${TUNNEL_GLYPH}</span>${escapeHtml(cell.display)}`;
+  } else {
+    valueHtml = escapeHtml(cell.display);
+  }
+  // Enlarged-only cells (e.g. Location) get a class CSS uses to
+  // hide them in normal-width view.
+  const cellClass = cell.enlargedOnly ? "meta-cell-enlarged" : "";
+  return `<div class="${cellClass}"><span>${escapeHtml(cell.label)}</span><strong class="${strongClass}" title="${titleAttr}" ${dataAttr}>${valueHtml}</strong></div>`;
+}
+
+function detailBackBarHtml({ ariaLabel, title, label }) {
+  return `<div class="detail-back-bar">
+        <button class="detail-back-btn" type="button" id="detailBackBtn"
+          aria-label="${escapeHtml(ariaLabel)}"
+          title="${escapeHtml(title)}">
+          <span class="detail-back-arrow" aria-hidden="true">←</span>
+          <span>${escapeHtml(label)}</span>
+        </button>
+      </div>`;
+}
+
+function drawerBackBarHtml(backToTunnel) {
+  if (backToTunnel) {
+    return detailBackBarHtml({
+      ariaLabel: "Back to tunnel inspector",
+      title: "Back to tunnel inspector",
+      label: "Back to tunnel",
+    });
+  }
+  if (state.drawerNavStack && state.drawerNavStack.length) {
+    return detailBackBarHtml({
+      ariaLabel: "Back to previous memory",
+      title: "Back to previous memory",
+      label: "Back to previous memory",
+    });
+  }
+  return "";
+}
+
+function detailMetaWatermarkHtml(tunnelsCount) {
+  return tunnelsCount > 0
+    ? `<svg class="detail-meta-tunnel-watermark" viewBox="0 0 200 40" aria-hidden="true" focusable="false">
+        <circle cx="10" cy="20" r="6" fill="currentColor"/>
+        <line x1="18" y1="20" x2="182" y2="20" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
+        <circle cx="190" cy="20" r="6" fill="currentColor"/>
+      </svg>`
+    : "";
 }
 
 /** Capture the current detail-pane selection (including tunnel
@@ -3209,6 +3398,17 @@ function renderDrawerDetail(drawer, opts = {}) {
   // the next render (typical case: user clicks the card, sees it,
   // clicks away — the card no longer has the Updated tag).
   markDrawerSeen(drawer.drawer_id);
+  // Stable identity for the open drawer so a background poll can follow
+  // it across an agent's MCP-side update, which re-embeds the memory under
+  // a NEW drawer_id (the creation time `filed_at` is preserved; the id is
+  // not). Consumed by reconcileSelection so the detail panel the user is
+  // reading is never collapsed just because an agent touched the memory.
+  state._selectedDrawerSig = {
+    filed_at: drawer.filed_at,
+    title: drawer.title,
+    wing: drawer.wing,
+    room: drawer.room,
+  };
   // Per-cell change detection so only the cells whose value actually
   // changed get the value-slide animation on a drawer → drawer
   // transition. Captured BEFORE we stamp the new kind / data so we can
@@ -3339,31 +3539,12 @@ function renderDrawerDetail(drawer, opts = {}) {
   // elsewhere in the inspector so the chrome reads as one UI, not a
   // transplanted iOS bar. The arrow is the same Unicode glyph as the
   // route arrow between endpoint cards (just facing the other way).
-  let backBar = "";
-  if (backToTunnel) {
-    backBar = `<div class="detail-back-bar">
-        <button class="detail-back-btn" type="button" id="detailBackBtn"
-          aria-label="Back to tunnel inspector"
-          title="Back to tunnel inspector">
-          <span class="detail-back-arrow" aria-hidden="true">←</span>
-          <span>Back to tunnel</span>
-        </button>
-      </div>`;
-  } else if (state.drawerNavStack && state.drawerNavStack.length) {
-    // Generic label — same chrome regardless of which memory the
-    // back step lands on. Inserting the previous title here read as
-    // visually noisy and forced length-capping for long titles;
-    // "Back to previous memory" is enough for the user to know the
-    // affordance returns them to where the wikilink was clicked.
-    backBar = `<div class="detail-back-bar">
-        <button class="detail-back-btn" type="button" id="detailBackBtn"
-          aria-label="Back to previous memory"
-          title="Back to previous memory">
-          <span class="detail-back-arrow" aria-hidden="true">←</span>
-          <span>Back to previous memory</span>
-        </button>
-      </div>`;
-  }
+  // Generic previous-memory label — same chrome regardless of which
+  // memory the back step lands on. Inserting the previous title here
+  // read as visually noisy and forced length-capping for long titles;
+  // "Back to previous memory" is enough for the user to know the
+  // affordance returns them to where the wikilink was clicked.
+  const backBar = drawerBackBarHtml(backToTunnel);
 
   els.detail.dataset.detailKind = "drawer";
   // Scroll preservation is conditional: keep the cursor where it was
@@ -3417,61 +3598,13 @@ function renderDrawerDetail(drawer, opts = {}) {
   // in non-enlarged mode (where the floating chip on the right is
   // hidden). That makes "this memory is linked" detectable at a
   // glance without having to maximize first.
-  const tunnelMetaWatermark = tunnelsCount > 0
-    ? `<svg class="detail-meta-tunnel-watermark" viewBox="0 0 200 40" aria-hidden="true" focusable="false">
-        <circle cx="10" cy="20" r="6" fill="currentColor"/>
-        <line x1="18" y1="20" x2="182" y2="20" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
-        <circle cx="190" cy="20" r="6" fill="currentColor"/>
-      </svg>`
-    : "";
+  const tunnelMetaWatermark = detailMetaWatermarkHtml(tunnelsCount);
   els.detail.innerHTML = `
     ${backBar}
     <div class="detail-meta">
       ${tunnelMetaWatermark}
       ${metadata
-        .map((cell, idx) => {
-          // The Drawer cell's value is itself the copy-ID affordance —
-          // click the hash to copy the full id. Hover + cursor + accent
-          // color signal interactivity; the title turns into an explicit
-          // "Click to copy" hint instead of just showing the full id.
-          const isDrawerCell = idx === 0;
-          const strongClass = [
-            cell.changed ? "value-changed" : "",
-            isDrawerCell ? "drawer-id-copy" : "",
-            cell.recent ? "meta-recent" : "",
-          ].filter(Boolean).join(" ");
-          const titleAttr = isDrawerCell
-            ? `Click to copy: ${escapeHtml(cell.full)}`
-            : escapeHtml(cell.full);
-          const dataAttr = isDrawerCell
-            ? `data-copy-drawer-id="${escapeHtml(cell.full)}"`
-            : "";
-          // Drawer cell renders BOTH the short hash suffix and the full
-          // id in nested spans; CSS shows one based on the enlarged
-          // state of the panel (.content-grid.detail-enlarged swaps to
-          // the full id since the metadata bar has plenty of horizontal
-          // room then). The full-form DISPLAY strips the `drawer_`
-          // prefix — redundant with the "DRAWER" label directly above —
-          // but the data-copy-drawer-id attribute keeps the full
-          // unmodified id for the click-to-copy action.
-          const fullDisplay = isDrawerCell
-            ? (cell.full || "").replace(/^drawer_/, "")
-            : cell.full;
-          // Tunnels cell prefixes its count with the graph-edge glyph so
-          // the link semantic is immediately legible even at a glance.
-          let valueHtml;
-          if (isDrawerCell) {
-            valueHtml = `<span class="drawer-id-short">${escapeHtml(cell.display)}</span><span class="drawer-id-full">${escapeHtml(fullDisplay)}</span>`;
-          } else if (cell.tunnels) {
-            valueHtml = `<span class="meta-tunnel-glyph" aria-hidden="true">${TUNNEL_GLYPH}</span>${escapeHtml(cell.display)}`;
-          } else {
-            valueHtml = escapeHtml(cell.display);
-          }
-          // Enlarged-only cells (e.g. Location) get a class CSS uses to
-          // hide them in normal-width view.
-          const cellClass = cell.enlargedOnly ? "meta-cell-enlarged" : "";
-          return `<div class="${cellClass}"><span>${escapeHtml(cell.label)}</span><strong class="${strongClass}" title="${titleAttr}" ${dataAttr}>${valueHtml}</strong></div>`;
-        })
+        .map(drawerMetadataCellHtml)
         .join("")}
     </div>
     ${bodyHtml}
@@ -8264,12 +8397,12 @@ document.addEventListener("keydown", (event) => {
       const maxBtn = document.querySelector("#detailPanelMaximize");
       if (!maxBtn) return;
       event.preventDefault();
-      state.detailEnlarged = !state.detailEnlarged;
-      maxBtn.setAttribute("aria-label", state.detailEnlarged ? "Minimize detail" : "Maximize detail");
-      maxBtn.setAttribute("title", state.detailEnlarged ? "Minimize" : "Maximize");
-      updateGridLayout();
-      // Persist enlarged state to the URL so refresh keeps the layout.
-      writeHash();
+      // Delegate to the maximize button's click handler (single source of
+      // truth) so F inherits its edit-mode-aware behavior: when the inline
+      // editor is open, that handler exits edit mode + collapses rather
+      // than just toggling size and stranding the editor toolbar. Mirrors
+      // how the browse-mode branch below delegates to drawersMaxBtn.click().
+      maxBtn.click();
       return;
     }
     const drawersMaxBtn = document.querySelector("#drawersPanelMaximize");
@@ -8567,6 +8700,30 @@ if (detailPanelClose) {
 const detailPanelMaximize = document.querySelector("#detailPanelMaximize");
 if (detailPanelMaximize) {
   detailPanelMaximize.addEventListener("click", () => {
+    // If the inline editor is open, this button doubles as an "exit edit
+    // mode" affordance. Opening the editor auto-maximizes the panel (see
+    // the E shortcut / edit pencil), so the natural gesture to leave is
+    // to press minimize — and the user expects that to drop them back
+    // into view mode, not just resize while the editor toolbar + chips
+    // linger (the reported bug). Mirror the close-X's instant edit
+    // teardown, but KEEP the memory selected (we're leaving the editor,
+    // not the memory) and collapse to the normal view size in one press.
+    // previousDrawerData is nulled so renderDrawerDetail's no-op
+    // short-circuit can't keep the stale editor markup mounted — it
+    // forces a clean view-mode rebuild.
+    if (state.isEditing && state.editBuffer) {
+      state.isEditing = false;
+      state.editBuffer = null;
+      state.editError = "";
+      state.editClosing = false;
+      state.detailEnlarged = false;
+      state.previousDrawerData = null;
+      detailPanelMaximize.setAttribute("aria-label", "Maximize detail");
+      detailPanelMaximize.setAttribute("title", "Maximize");
+      render();
+      writeHash();
+      return;
+    }
     state.detailEnlarged = !state.detailEnlarged;
     detailPanelMaximize.setAttribute(
       "aria-label",
@@ -9244,36 +9401,65 @@ function getNotificationPollIntervalSeconds() {
  * poll) actually play instead of being silently dropped. */
 let _notifAudioCtx = null;
 let _notifAudioUnlocked = false;
+let _notifFallbackAudio = null;
 
-function unlockNotificationAudio() {
+function isSafariBrowser() {
+  const ua = navigator.userAgent || "";
+  return /Safari/i.test(ua)
+    && !/Chrome|Chromium|CriOS|FxiOS|Edg|OPR|Android/i.test(ua);
+}
+
+function getNotificationAudioContext() {
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  if (!AudioCtx) return null;
+  if (!_notifAudioCtx) _notifAudioCtx = new AudioCtx();
+  return _notifAudioCtx;
+}
+
+async function resumeNotificationAudioContext(ctx) {
+  if (!ctx || ctx.state !== "suspended") return ctx && ctx.state === "running";
+  try {
+    await Promise.race([
+      ctx.resume(),
+      new Promise((resolve) => setTimeout(resolve, 250)),
+    ]);
+  } catch {
+    return false;
+  }
+  return ctx.state === "running";
+}
+
+async function unlockNotificationAudio() {
   // Two-tier behaviour:
   //  • First gesture: create context + resume + play 1ms silent tone
-  //    to fully unlock per Safari/Chrome autoplay policy. Set the flag.
+  //    to fully unlock per Safari/Chrome autoplay policy. Set the flag
+  //    only after the context is genuinely running.
   //  • Subsequent gestures: if context exists AND is suspended (browser
   //    re-suspended after tab idle, OS audio interruption, etc.),
   //    re-resume. Cheap — does nothing when already running.
   try {
-    const AudioCtx = window.AudioContext || window.webkitAudioContext;
-    if (!AudioCtx) return;
-    if (!_notifAudioCtx) _notifAudioCtx = new AudioCtx();
-    if (_notifAudioCtx.state === "suspended") {
-      _notifAudioCtx.resume().catch(() => {});
-    }
+    const ctx = getNotificationAudioContext();
+    if (!ctx) return false;
+    await resumeNotificationAudioContext(ctx);
+    if (ctx.state !== "running") return false;
     if (!_notifAudioUnlocked) {
       // First-gesture unlock — play a 1ms zero-volume tone. Some
       // browsers require an actual node operation (not just resume)
       // inside the gesture to fully unlock the context. Inaudible.
-      const now = _notifAudioCtx.currentTime;
-      const osc = _notifAudioCtx.createOscillator();
-      const gain = _notifAudioCtx.createGain();
+      const now = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
       gain.gain.value = 0;
-      osc.connect(gain).connect(_notifAudioCtx.destination);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
       osc.start(now);
       osc.stop(now + 0.001);
       _notifAudioUnlocked = true;
     }
+    return true;
   } catch {
     // Audio unavailable — sound just won't play this session.
+    return false;
   }
 }
 
@@ -9286,13 +9472,13 @@ function unlockNotificationAudio() {
 // silent forever. Capture phase to catch even events with downstream
 // stopPropagation. */
 ["pointerdown", "keydown", "touchstart"].forEach((evt) => {
-  document.addEventListener(evt, unlockNotificationAudio, { capture: true });
+  document.addEventListener(evt, () => { void unlockNotificationAudio(); }, { capture: true });
 });
 
 function playNotificationSound() {
   // Ascending two-tone (F5 → A5, minor third up) — "something good
   // happened" cadence. See _playTones for the actual scheduling.
-  _playTones([
+  return _playTones([
     { freq: 698.46, start: 0    },  // F5
     { freq: 880,    start: 0.09 },  // A5
   ], { decay: 0.25, gain: 0.12 });
@@ -9307,7 +9493,7 @@ function playNotificationSound() {
  * sound so they read as siblings rather than two unrelated audio
  * vocabularies. */
 function playNotificationErrorSound() {
-  _playTones([
+  return _playTones([
     { freq: 783.99, start: 0    },  // G5
     { freq: 587.33, start: 0.12 },  // D5 (descending perfect fourth)
   ], { decay: 0.32, gain: 0.13 });
@@ -9323,22 +9509,13 @@ function playNotificationErrorSound() {
  * pattern was the silent-sound regression: oscillators landed before
  * resume completed and were lost. */
 async function _playTones(tones, { decay = 0.25, gain = 0.12 } = {}) {
+  if (isSafariBrowser()) {
+    return playToneAudioFallback(tones, { decay, gain });
+  }
   try {
-    if (!_notifAudioCtx) {
-      const AudioCtx = window.AudioContext || window.webkitAudioContext;
-      if (!AudioCtx) return;
-      _notifAudioCtx = new AudioCtx();
-    }
+    const unlocked = await unlockNotificationAudio();
+    if (!unlocked) return playToneAudioFallback(tones, { decay, gain });
     const ctx = _notifAudioCtx;
-    if (ctx.state === "suspended") {
-      // Await — if we're inside a user-gesture call stack this
-      // resolves and the context becomes "running"; outside one,
-      // browsers reject and we silently bail (the next gesture-
-      // triggered playback will succeed once the unlock listener
-      // resumes the context).
-      try { await ctx.resume(); } catch { return; }
-    }
-    if (ctx.state !== "running") return;
     const now = ctx.currentTime;
     tones.forEach(({ freq, start }) => {
       const osc = ctx.createOscillator();
@@ -9348,12 +9525,111 @@ async function _playTones(tones, { decay = 0.25, gain = 0.12 } = {}) {
       g.gain.setValueAtTime(0, now + start);
       g.gain.linearRampToValueAtTime(gain, now + start + 0.01);
       g.gain.exponentialRampToValueAtTime(0.001, now + start + decay);
-      osc.connect(g).connect(ctx.destination);
+      osc.connect(g);
+      g.connect(ctx.destination);
       osc.start(now + start);
       osc.stop(now + start + decay + 0.02);
     });
+    return true;
   } catch {
-    // AudioContext unavailable / disposed / disallowed — silent fail.
+    return playToneAudioFallback(tones, { decay, gain });
+  }
+}
+
+function writeAscii(view, offset, value) {
+  for (let i = 0; i < value.length; i += 1) {
+    view.setUint8(offset + i, value.charCodeAt(i));
+  }
+}
+
+function bytesToBase64(bytes) {
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, i + chunkSize);
+    binary += String.fromCharCode.apply(null, chunk);
+  }
+  return btoa(binary);
+}
+
+function toneWavBytes(tones, { decay = 0.25, gain = 0.12 } = {}) {
+  const sampleRate = 22050;
+  const duration = Math.max(...tones.map((t) => t.start + decay + 0.04));
+  const sampleCount = Math.ceil(sampleRate * duration);
+  const buffer = new ArrayBuffer(44 + sampleCount * 2);
+  const view = new DataView(buffer);
+  writeAscii(view, 0, "RIFF");
+  view.setUint32(4, 36 + sampleCount * 2, true);
+  writeAscii(view, 8, "WAVE");
+  writeAscii(view, 12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeAscii(view, 36, "data");
+  view.setUint32(40, sampleCount * 2, true);
+  for (let i = 0; i < sampleCount; i += 1) {
+    const t = i / sampleRate;
+    let sample = 0;
+    for (const tone of tones) {
+      const local = t - tone.start;
+      if (local < 0 || local > decay) continue;
+      const attack = Math.min(0.012, decay / 3);
+      const envelope = local < attack
+        ? local / attack
+        : Math.pow(0.001, (local - attack) / Math.max(0.001, decay - attack));
+      sample += Math.sin(2 * Math.PI * tone.freq * local) * gain * envelope;
+    }
+    const clamped = Math.max(-1, Math.min(1, sample));
+    view.setInt16(44 + i * 2, Math.round(clamped * 32767), true);
+  }
+  return new Uint8Array(buffer);
+}
+
+function toneWavSource(tones, options = {}) {
+  const bytes = toneWavBytes(tones, options);
+  if (typeof Blob !== "undefined" && typeof URL !== "undefined" && typeof URL.createObjectURL === "function") {
+    const src = URL.createObjectURL(new Blob([bytes], { type: "audio/wav" }));
+    return { src, revoke: () => URL.revokeObjectURL(src) };
+  }
+  return { src: `data:audio/wav;base64,${bytesToBase64(bytes)}`, revoke: () => {} };
+}
+
+function getNotificationFallbackAudio() {
+  if (_notifFallbackAudio) return _notifFallbackAudio;
+  const audio = document.createElement("audio");
+  audio.preload = "auto";
+  audio.setAttribute("playsinline", "");
+  audio.playsInline = true;
+  audio.style.display = "none";
+  document.body.appendChild(audio);
+  _notifFallbackAudio = audio;
+  return audio;
+}
+
+async function playToneAudioFallback(tones, options = {}) {
+  let source = null;
+  try {
+    if (typeof btoa !== "function") return false;
+    const audio = getNotificationFallbackAudio();
+    try {
+      audio.pause();
+      audio.currentTime = 0;
+    } catch {}
+    source = toneWavSource(tones, options);
+    audio.src = source.src;
+    audio.volume = 1;
+    await audio.play();
+    return true;
+  } catch {
+    if (source) source.revoke();
+    return false;
+  }
+  finally {
+    if (source) setTimeout(source.revoke, 1500);
   }
 }
 
@@ -9502,15 +9778,17 @@ function renderNotifications() {
     // First render — establish baseline silently.
     state._lastNotifCount = n;
     state._lastFailureCount = failureCount;
-  } else if (n > prevTotal && getNotificationSounds()) {
-    const now = Date.now();
-    if (!state._lastNotifSoundAt || (now - state._lastNotifSoundAt) > 500) {
-      if (failureCount > prevFailures) {
-        playNotificationErrorSound();
-      } else {
-        playNotificationSound();
+  } else if (n > prevTotal) {
+    if (getNotificationSounds()) {
+      const now = Date.now();
+      if (!state._lastNotifSoundAt || (now - state._lastNotifSoundAt) > 500) {
+        if (failureCount > prevFailures) {
+          playNotificationErrorSound();
+        } else {
+          playNotificationSound();
+        }
+        state._lastNotifSoundAt = now;
       }
-      state._lastNotifSoundAt = now;
     }
     state._lastNotifCount = n;
     state._lastFailureCount = failureCount;
@@ -9811,18 +10089,19 @@ if (polishTextToggle) {
 }
 
 // Settings → "Send test notification". Pushes a fake failed-save
-// entry onto state.failedSaves and re-renders so the bell receives
-// it. Same code path a real edit/delete/restore failure would take —
-// shows the user exactly what an error notification looks like AND
-// exercises the descending error-chime branch of renderNotifications'
-// sound-trigger logic (failure count grew → playNotificationErrorSound).
+// entry onto state.failedSaves, shows the browser notification preview
+// when permission is granted, plays the error chime directly from the
+// click handler, then re-renders so the bell receives it. The direct
+// playback is intentional: relying only on renderNotifications' count-
+// delta branch made the test button silent whenever the baseline count
+// was still uninitialized (first render is intentionally quiet).
 //
 // The fake drawer_id is prefixed `__test_failure_` so it never collides
 // with a real drawer's id, and the timestamp suffix lets the user fire
 // the test repeatedly (pushFailedSave dedupes by drawer_id).
 const sendTestNotifBtn = document.querySelector("#sendTestNotifBtn");
 if (sendTestNotifBtn) {
-  sendTestNotifBtn.addEventListener("click", () => {
+  sendTestNotifBtn.addEventListener("click", async () => {
     pushFailedSave({
       drawer_id: `__test_failure_${Date.now()}`,
       title: "Test notification",
@@ -9830,9 +10109,13 @@ if (sendTestNotifBtn) {
       room: "demo",
       error: "Simulated failure — this is a preview, no real save was attempted.",
     });
+    if (getNotificationSounds()) {
+      await playNotificationErrorSound();
+      state._lastNotifSoundAt = Date.now();
+    }
     // Render so the bell badge + dropdown reflect the new failure
-    // entry. The sound-trigger logic inside renderNotifications detects
-    // the failure-count increase and plays the error chime.
+    // entry. The debounce timestamp above prevents a second immediate
+    // chime if renderNotifications also sees the count increase.
     renderNotifications();
   });
 }
@@ -9905,16 +10188,17 @@ if (suppressUpdatesToggle) {
 const notificationSoundsToggle = document.querySelector("#notificationSoundsToggle");
 if (notificationSoundsToggle) {
   notificationSoundsToggle.addEventListener("change", async () => {
-    await updatePreferences({ notification_sounds: notificationSoundsToggle.checked });
+    const enabled = notificationSoundsToggle.checked;
     // Audible preview when the user FLIPS ON sounds — plays the
     // success chime then, ~400ms later, the descending error chime
     // so they hear BOTH vocabularies the preference now controls.
     // No ping on flip-off (silence-on-disable is the expected
     // feedback).
-    if (notificationSoundsToggle.checked) {
-      playNotificationSound();
+    if (enabled) {
+      await playNotificationSound();
       setTimeout(() => playNotificationErrorSound(), 450);
     }
+    await updatePreferences({ notification_sounds: enabled });
   });
 }
 
@@ -10213,6 +10497,15 @@ document.addEventListener("visibilitychange", () => {
           state._seenMap = freshSeen;
         } else if (cached.seen && typeof cached.seen === "object") {
           state._seenMap = cached.seen;
+        }
+        // Hydrate tunnel indicators from THEIR cache too, so the instant
+        // paint draws the meta-strip watermark + wing/room connection
+        // counts instead of popping them in when /api/tunnels resolves.
+        // The live tunnels fetch (already in flight from boot) overwrites
+        // this right after.
+        if (!state.tunnelsLoaded) {
+          const cachedTunnels = readTunnelsCache();
+          if (cachedTunnels) applyTunnelItems(cachedTunnels);
         }
         reconcileSelection();
         render();

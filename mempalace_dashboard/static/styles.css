@@ -3,6 +3,14 @@
   --bg: #f5f5f7;
   --surface: rgba(255, 255, 255, 0.78);
   --surface-strong: rgba(255, 255, 255, 0.94);
+  /* FULLY OPAQUE banner colour for the sticky .detail-meta strip. It is
+     deliberately solid (not --surface-strong, which is 0.94 alpha) so
+     body text scrolling UNDER the sticky band can't ghost through. Value
+     ≈ the frosted panel's apparent colour with the old 3.5% banner tint
+     baked in, so it still reads as a subtle header strip, just opaque.
+     The .detail-meta::after fade dissolves the body text FROM this same
+     colour, so the text fades into the header cleanly. */
+  --meta-band: #f4f4f5;
   --line: rgba(0, 0, 0, 0.08);
   --text: #1d1d1f;
   --muted: #6e6e73;
@@ -40,6 +48,7 @@
     --bg: #000000;
     --surface: rgba(28, 28, 30, 0.76);
     --surface-strong: rgba(44, 44, 46, 0.94);
+    --meta-band: #202022;
     --line: rgba(255, 255, 255, 0.12);
     --text: #f5f5f7;
     --muted: #a1a1a6;
@@ -61,6 +70,7 @@
     --bg: #000000;
     --surface: rgba(28, 28, 30, 0.76);
     --surface-strong: rgba(44, 44, 46, 0.94);
+    --meta-band: #202022;
     --line: rgba(255, 255, 255, 0.12);
     --text: #f5f5f7;
     --muted: #a1a1a6;
@@ -2675,14 +2685,51 @@ select:focus {
      show through whenever the floating .detail-panel-close /
      .detail-panel-edit buttons become semi-transparent on hover. */
   border-radius: var(--radius);
-  /* Top + bottom soft fade — same gradient-mask trick as the right-
-     edge fade on .drawer-preview, just rotated 90° and mirrored. As
-     the user scrolls content vertically, both top and bottom edges
-     alpha-fade so the content dissolves into the panel chrome
-     instead of cleaving hard against the floating buttons or
-     scrollbar gutter. */
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0, black 18px, black calc(100% - 18px), transparent 100%);
-  mask-image: linear-gradient(to bottom, transparent 0, black 18px, black calc(100% - 18px), transparent 100%);
+  /* Bottom-edge soft fade only. The TOP fade is intentionally omitted
+     here: the sticky, opaque .detail-meta band sits at the top of the
+     scroll viewport, so a top mask would alpha-fade the metadata
+     HEADER itself (DRAWER/DATE/SOURCE/…) — not what we want. Instead
+     the body-text fade is anchored just BELOW the meta's divider line
+     via .detail-meta::after (see below), matching the memories panel
+     where the header is a non-scrolling sibling above the fade. The
+     bottom fade is unchanged — content still dissolves into the panel
+     chrome at the bottom edge instead of cleaving hard. */
+  -webkit-mask-image: linear-gradient(to bottom, black 0, black calc(100% - 18px), transparent 100%);
+  mask-image: linear-gradient(to bottom, black 0, black calc(100% - 18px), transparent 100%);
+}
+
+/* Body-text fade sitting just BELOW the meta strip's divider line.
+   The old top mask on .detail faded the whole scroll-viewport top,
+   which dimmed the metadata HEADER itself — the user wanted the fade
+   moved under the divider so only the BODY text dissolves into the
+   line (matching the memories panel, whose header is a non-scrolling
+   sibling above the list fade). This overlay is an ::after on the
+   meta strip: it renders right under the divider and fades the body's
+   first lines from the panel surface to transparent over ~22px. The
+   meta is position:sticky (a positioned box) so it — and this pseudo —
+   pin to the scroll-viewport top AND paint ABOVE the in-flow body
+   content; z-index makes that explicit. Top colour is --meta-band, the
+   same fully-opaque colour as the now-sticky band above it, so the body
+   text dissolves into the band's colour at the divider in both themes,
+   not a coloured wash. pointer-events:none so it never eats clicks. */
+.detail-meta {
+  z-index: 6;
+}
+.detail-meta::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  /* +1px past 100% so the fade starts just BELOW the band's 1px
+     border-bottom divider. Without the offset the opaque --meta-band top
+     edge paints directly over the divider and hides it. The 1px clears
+     exactly the border so the divider line stays visible above the fade. */
+  transform: translateY(calc(100% + 1px));
+  height: 22px;
+  background: linear-gradient(to bottom, var(--meta-band), transparent);
+  pointer-events: none;
+  z-index: 4;
 }
 
 /* Same top + bottom fade on the rooms-panel scroll container and the
@@ -2939,7 +2986,18 @@ select:focus {
 }
 
 .detail-meta {
-  position: relative;
+  /* Sticky so the metadata band — and the body-text fade pinned just
+     below its divider (.detail-meta::after) — stay glued to the top of
+     the .detail scroll viewport as the body scrolls UNDER them, instead
+     of scrolling away with the content (the earlier position:relative
+     made the fade ride the content up and out, so it felt redundant).
+     Matches the memories panel, whose header is a non-scrolling sibling
+     above the list fade. Requires the OPAQUE background set below so the
+     body text can't bleed through the band as it scrolls beneath it.
+     position:sticky is still a positioned box, so the absolute ::after
+     keeps anchoring to it. */
+  position: sticky;
+  top: 0;
   display: grid;
   /* Known-good layout (restored). Content-sized columns evenly spread
      across the strip: `auto` columns shrink/share so all four cells fit
@@ -2972,20 +3030,14 @@ select:focus {
      near-white). Switched to a tiny additive dark overlay
      (rgba(0,0,0,0.035)) — same approach as macOS sidebar headers:
      slight darkening that reads as a banner without competing with
-     content. Dark mode mirrors with a corresponding additive light
-     overlay so both themes have equivalent visual contrast. */
-  background: rgba(0, 0, 0, 0.035);
+     content. The band is FULLY OPAQUE via --meta-band (a solid colour,
+     theme-aware) — NOT --surface-strong, which is 0.94 alpha and let the
+     body text ghost through the sticky band (it scrolls underneath),
+     making the header read as semi-transparent. The user wants a solid
+     header; only the body text should fade. The ::after fade dissolves
+     the body FROM this same --meta-band colour. */
+  background: var(--meta-band);
 }
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .detail-meta {
-    background: rgba(255, 255, 255, 0.045);
-  }
-}
-
-:root[data-theme="dark"] .detail-meta {
-    background: rgba(255, 255, 255, 0.045);
-  }
 
 .detail-meta div {
   display: grid;
@@ -3936,16 +3988,23 @@ html.reduce-motion .detail-panel-tunnel-unbind {
   justify-self: end;
   align-self: start;
   position: sticky;
-  /* Initial position pushed down via margin-top so chips clear the
-     H1 title AND the Wing pill's vertical centre lines up with the
-     first body-paragraph line — that symmetry was the request. 170
-     was chosen by eye against a 3-line H1; shorter titles will have
-     the chips sitting comfortably below regardless because the
-     column is sticky and the body has plenty of vertical runway.
-     Sticky top matches so when the user scrolls, chips lock at the
-     same visual level instead of drifting up to the very top. */
-  top: 170px;
-  margin-top: 170px;
+  /* The column must STAY put and float in place as the user scrolls — no
+     ride-up. position:sticky pins from the very first pixel only when the
+     element's at-rest position EQUALS `top` (otherwise it rides, or gets
+     pushed down). #detail has NO padding, so:
+       at-rest = sticky .detail-meta band height (~78px) + margin-top (162px)
+               = 240px
+     So `top: 240px` == at-rest → pinned at 240px the instant it renders,
+     no drift. The floating tunnel box is JS-positioned just ABOVE this
+     column (box bottom = metaBottom + 170 − 16 ≈ 232), so 240 sits the
+     wing/room pills ~8px directly UNDER the box — a tight stack, not the
+     ~56px gap the earlier 288 (a wrong +40 #detail-padding assumption)
+     produced. The box's vertical anchor in app.js (metaBottom + 170) and
+     this 240/162 must stay coupled: box-bottom = metaBottom+154, chips-top
+     = metaBottom+162, so the 8px gap = 162 − 154. The chips live in the
+     LEFT grid gutter (column 1), never over the centred title/body. */
+  top: 240px;
+  margin-top: 162px;
   /* Strip the top-bar styling — in side-floating layout the chips
      are individual pills, not a backdrop bar. */
   background: transparent;
@@ -4785,15 +4844,20 @@ html.reduce-motion .content-grid.detail-enlarged .detail-edit-grid .detail-edito
 /* When the panel is enlarged, increase the bottom mask-fade from
    the default 18px to ~80px so the last lines of content fade
    gracefully behind the floating action buttons instead of being
-   visually clipped by them. Top fade stays 18px (no top chrome
-   to fade into). Applied in BOTH view and edit modes — earlier
+   visually clipped by them. BOTTOM fade only — the TOP fade was
+   removed (it used to be `transparent 0, black 18px`, which dimmed
+   the top of the sticky .detail-meta band, showing as a useless
+   gradient over the metadata header in maximized view). Mirrors the
+   non-enlarged .detail rule, which is also bottom-only; the body-text
+   fade under the divider is handled by .detail-meta::after, not a top
+   mask. Applied in BOTH view and edit modes — earlier
    :not(.detail-editing) scope inadvertently dropped the fade
    when entering edit mode, which looked like a bug (the cap
    suddenly appeared sharp again where it had been soft moments
    before). */
 .content-grid.detail-enlarged .detail {
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0, black 18px, black calc(100% - 80px), transparent 100%);
-  mask-image: linear-gradient(to bottom, transparent 0, black 18px, black calc(100% - 80px), transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, black 0, black calc(100% - 80px), transparent 100%);
+  mask-image: linear-gradient(to bottom, black 0, black calc(100% - 80px), transparent 100%);
 }
 
 /* ---------- Tunnel inspector (right pane) ----------

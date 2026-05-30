@@ -94,7 +94,7 @@
     />
     <meta name="twitter:image" content="/apricity-logo.png" />
 
-    <link rel="stylesheet" href="/styles.css?v=350" />
+    <link rel="stylesheet" href="/styles.css?v=362" />
   </head>
   <body>
     <div class="shell">
@@ -964,7 +964,7 @@
               <label class="settings-card-row settings-card-row-select">
                 <div class="settings-card-row-text">
                   <strong>Refresh interval</strong>
-                  <span>How often the dashboard checks for new notifications from external MCP clients (Codex, other Claude sessions, sync tool). Shorter = feels more live, more Pi work. Paused while the tab is hidden either way.</span>
+                  <span>How often the dashboard checks for new notifications from external MCP clients (Codex, other Claude sessions, sync tool). Shorter = feels more live, more Pi work. Hidden tabs pause polling to save CPU and resume when you return to the tab.</span>
                 </div>
                 <select id="notificationPollIntervalSelect" class="settings-select-control">
                   <option value="15">Every 15 seconds</option>
@@ -1513,7 +1513,7 @@
          app.js. Order is preserved (app.js before lab.js) and all
          event handlers attach inside the scripts, so deferring is
          safe. Shaves the JS-execution stall off the first paint. -->
-    <script src="/app.js?v=264" defer></script>
+    <script src="/app.js?v=284" defer></script>
     <script src="/lab.js?v=4" defer></script>
   </body>
 </html>
