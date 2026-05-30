@@ -167,7 +167,7 @@ apricity
 ```
 
 > [!NOTE]
-> The PyPI package is named `apricity`. If it isn't published yet, install from a clone (above) or from a [GitHub Release](https://github.com/epinethrone/apricity/releases) in the meantime.
+> Published on PyPI as [`apricity`](https://pypi.org/project/apricity/) — `pip install apricity` or `uv tool install apricity` work too.
 
 There's no build step and no third-party runtime dependencies — the package is published purely so installing it is one command. If your MemPalace install lives somewhere non-standard, copy [`.env.example`](.env.example) to `.env` (or export the variables in your shell) and adjust the paths before launching.
 
