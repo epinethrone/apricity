@@ -17,7 +17,7 @@ import sys
 import time
 import urllib.request
 from collections import Counter
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from http.cookies import SimpleCookie
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -144,6 +144,11 @@ SEEN_FILE = _env_path(
     "MEMPALACE_SEEN",
     MEMPALACE_HOME / "dashboard-seen.json",
 )
+FACT_EVENTS_FILE = _env_path(
+    "MEMPALACE_FACT_EVENTS",
+    MEMPALACE_HOME / "dashboard-fact-events.json",
+)
+TUNNELS_FILE = _env_path("MEMPALACE_TUNNELS", MEMPALACE_HOME / "tunnels.json")
 CREDENTIALS_FILE = _env_path("MEMPALACE_CREDENTIALS", MEMPALACE_HOME / "dashboard-credentials.json")
 SESSIONS_FILE = _env_path("MEMPALACE_SESSIONS", MEMPALACE_HOME / "dashboard-sessions.json")
 PREFERENCES_FILE = _env_path("MEMPALACE_PREFERENCES", MEMPALACE_HOME / "dashboard-preferences.json")
@@ -393,6 +398,41 @@ def _file_size(path: Path) -> int:
         return 0
 
 
+def _file_signature(path: Path) -> str:
+    try:
+        st = path.stat()
+    except OSError:
+        return "missing"
+    return f"{st.st_mtime_ns}:{st.st_size}"
+
+
+def palace_version_token() -> str:
+    """Cheap fingerprint for everything included in /api/palace.
+
+    Used by background polling so the browser can skip the full palace
+    read/render cycle when no drawer, fact, update marker, or shared
+    seen-state input has changed.
+    """
+    palace_db = str(PALACE_DB)
+    kg_db = str(KG_DB)
+    parts = [
+        "palace-schema:v1",
+        f"palace:{_file_signature(PALACE_DB)}",
+        f"palace-wal:{_file_signature(Path(palace_db + '-wal'))}",
+        f"palace-journal:{_file_signature(Path(palace_db + '-journal'))}",
+        f"kg:{_file_signature(KG_DB)}",
+        f"kg-wal:{_file_signature(Path(kg_db + '-wal'))}",
+        f"kg-journal:{_file_signature(Path(kg_db + '-journal'))}",
+        f"dashboard-versions:{_file_signature(VERSIONS_LOG)}",
+        f"mp-wal:{_file_signature(MP_WAL_LOG)}",
+        f"restored:{_file_signature(RESTORED_DRAWERS_LOG)}",
+        f"seen:{_file_signature(SEEN_FILE)}",
+        f"fact-events:{_file_signature(FACT_EVENTS_FILE)}",
+    ]
+    raw = "|".join(parts).encode("utf-8", errors="replace")
+    return hashlib.sha1(raw).hexdigest()
+
+
 def import_palace(payload: dict, actor: str = "User") -> dict:
     """Restore drawers + facts from a mempalace-export payload, deduping by content."""
     data = payload.get("data") if isinstance(payload, dict) else None
@@ -438,13 +478,14 @@ def import_palace(payload: dict, actor: str = "User") -> dict:
             # JSON bulk-restore via dashboard → source="Import", actor =
             # the authenticated dashboard user (e.g. "zhiar"), not generic
             # "User". The session captured `actor` in the request handler.
-            mempalace_add_drawer(
+            result = mempalace_add_drawer(
                 wing=wing,
                 room=room,
                 content=content,
                 source_file="Import",
                 added_by=actor,
             )
+            _mark_new_drawer_seen(result)
             seen_drawer_keys.add(key)
             added_drawers += 1
         except (RuntimeError, ValueError) as exc:
@@ -476,13 +517,17 @@ def import_palace(payload: dict, actor: str = "User") -> dict:
             skipped_facts += 1
             continue
         try:
-            mempalace_kg_add(
+            result = mempalace_kg_add(
                 subject,
                 predicate,
                 obj,
                 valid_from=str(entry.get("valid_from", "")).strip(),
                 source_drawer_id="",
             )
+            if isinstance(result, dict):
+                fact_id = str(result.get("triple_id") or result.get("id") or "").strip()
+                if fact_id:
+                    mark_fact_event_seen(fact_id, "added")
             active_fact_keys.add(key)
             added_facts += 1
         except (RuntimeError, ValueError) as exc:
@@ -760,12 +805,14 @@ def _record_restored_drawer(drawer_id: str) -> None:
 
 
 # ---------- shared seen-state map ----------
-# Map of drawer_id → ISO seen-at timestamp. Single source of truth for
+# Map of notification item id → ISO seen-at timestamp. Drawer ids are
+# stored directly; fact lifecycle notifications use fact:<id>:added,
+# fact:<id>:ended, and fact:<id>:deleted keys. Single source of truth for
 # "which notifications has the user dismissed" across every browser/
 # device hitting this Pi dashboard. Loaded lazily on first access;
 # rewritten atomically on every mark-seen so concurrent multi-client
 # writes don't corrupt the file (last write wins, which is fine — the
-# semantic is "any client marking this drawer seen is enough").
+# semantic is "any client marking this notification item seen is enough").
 _SEEN_CACHE: dict | None = None
 
 
@@ -794,18 +841,18 @@ def load_seen_map() -> dict[str, str]:
     return _SEEN_CACHE
 
 
-def mark_drawers_seen(drawer_ids: list[str], seen_at: str | None = None) -> dict[str, str]:
-    """Stamp each id in `drawer_ids` with `seen_at` (or now) in the
+def mark_items_seen(item_ids: list[str], seen_at: str | None = None) -> dict[str, str]:
+    """Stamp each id in `item_ids` with `seen_at` (or now) in the
     shared map and persist to disk. Returns the updated map. Caller
     is expected to filter to non-empty string ids — we defensively
     skip blanks just in case."""
     if seen_at is None:
-        seen_at = datetime.now().isoformat(timespec="seconds")
+        seen_at = datetime.now().isoformat(timespec="microseconds")
     current = load_seen_map()
     changed = False
-    for did in drawer_ids:
-        if isinstance(did, str) and did.strip():
-            current[did] = seen_at
+    for item_id in item_ids:
+        if isinstance(item_id, str) and item_id.strip():
+            current[item_id] = seen_at
             changed = True
     if changed:
         try:
@@ -819,6 +866,233 @@ def mark_drawers_seen(drawer_ids: list[str], seen_at: str | None = None) -> dict
             # clients won't pick up the change. Acceptable degradation.
             pass
     return current
+
+
+def mark_drawers_seen(drawer_ids: list[str], seen_at: str | None = None) -> dict[str, str]:
+    """Backward-compatible wrapper for drawer-only call sites."""
+    return mark_items_seen(drawer_ids, seen_at)
+
+
+def _mark_new_drawer_seen(result: dict) -> str:
+    """Mark a successful dashboard-created drawer as already seen.
+
+    Dashboard-originated creates are direct user actions, so they
+    should not boomerang back through the notification bell. External
+    MCP writes still arrive unseen because they bypass this helper.
+    """
+    if not isinstance(result, dict):
+        return ""
+    drawer_id = str(result.get("drawer_id") or "").strip()
+    if drawer_id:
+        mark_drawers_seen([drawer_id])
+    return drawer_id
+
+
+# ---------- fact lifecycle notification events ----------
+_FACT_EVENTS_CACHE: dict | None = None
+
+
+def _now_iso_microseconds() -> str:
+    return datetime.now().astimezone().isoformat(timespec="microseconds")
+
+
+def _normalize_iso_like(value: object, *, assume_utc: bool = False) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    try:
+        parsed = datetime.fromisoformat(raw.replace(" ", "T"))
+        if assume_utc and parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.isoformat(timespec="seconds")
+    except ValueError:
+        return raw
+
+
+def fact_event_id(fact_id: str, event: str) -> str:
+    fid = str(fact_id or "").strip()
+    kind = str(event or "").strip()
+    return f"fact:{fid}:{kind}" if fid and kind else ""
+
+
+def load_fact_events_state() -> dict:
+    """Load persisted KG lifecycle observation state.
+
+    The KG DB records fact creation time (`extracted_at`) but not an
+    invalidation or deletion timestamp. The dashboard therefore keeps a
+    tiny observed lifecycle ledger so external MCP invalidations and hard
+    deletes can produce stable notifications when the polling server first
+    sees them.
+    """
+    global _FACT_EVENTS_CACHE
+    if _FACT_EVENTS_CACHE is not None:
+        return _FACT_EVENTS_CACHE
+    state = {"known": {}, "events": {}}
+    if FACT_EVENTS_FILE.exists():
+        try:
+            raw = json.loads(FACT_EVENTS_FILE.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                known = raw.get("known")
+                events = raw.get("events")
+                if isinstance(known, dict):
+                    state["known"] = known
+                if isinstance(events, dict):
+                    state["events"] = events
+        except (OSError, ValueError):
+            pass
+    _FACT_EVENTS_CACHE = state
+    return _FACT_EVENTS_CACHE
+
+
+def save_fact_events_state(state: dict) -> None:
+    try:
+        FACT_EVENTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = FACT_EVENTS_FILE.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(FACT_EVENTS_FILE)
+    except OSError:
+        pass
+
+
+def _fact_snapshot(fact: dict) -> dict:
+    return {
+        "subject": str(fact.get("subject") or ""),
+        "predicate": str(fact.get("predicate") or ""),
+        "object": str(fact.get("object") or ""),
+        "valid_from": str(fact.get("valid_from") or ""),
+        "valid_to": str(fact.get("valid_to") or ""),
+        "source_drawer_id": str(fact.get("source_drawer_id") or ""),
+        # SQLite CURRENT_TIMESTAMP is UTC but stored without an offset.
+        # Emit an offset-bearing ISO value so browsers don't interpret it
+        # as local wall time and show "2h ago" in CEST.
+        "extracted_at": _normalize_iso_like(fact.get("extracted_at"), assume_utc=True),
+    }
+
+
+def _fact_event_payload(event: dict, fact: dict | None) -> dict | None:
+    fact_id = str(event.get("fact_id") or "").strip()
+    kind = str(event.get("event") or "").strip()
+    event_id = str(event.get("event_id") or fact_event_id(fact_id, kind)).strip()
+    if not fact_id or not kind or not event_id:
+        return None
+    source = fact or event
+    payload = {
+        "event_id": event_id,
+        "event": kind,
+        "at": _normalize_iso_like(event.get("at"), assume_utc=(kind == "added")),
+        "fact_id": fact_id,
+    }
+    for key in ("subject", "predicate", "object", "valid_from", "valid_to", "source_drawer_id"):
+        payload[key] = source.get(key)
+    return payload
+
+
+def sync_fact_events(triples: list[dict]) -> list[dict]:
+    state = load_fact_events_state()
+    known = state.setdefault("known", {})
+    events = state.setdefault("events", {})
+    triples_by_id: dict[str, dict] = {}
+    current_ids: set[str] = set()
+    changed = False
+
+    for fact in triples:
+        fact_id = str(fact.get("id") or "").strip()
+        if not fact_id:
+            continue
+        triples_by_id[fact_id] = fact
+        current_ids.add(fact_id)
+        snapshot = _fact_snapshot(fact)
+        previous = known.get(fact_id)
+
+        if previous is None:
+            known[fact_id] = snapshot
+            changed = True
+            add_event_id = fact_event_id(fact_id, "added")
+            if add_event_id and add_event_id not in events:
+                events[add_event_id] = {
+                    "event_id": add_event_id,
+                    "fact_id": fact_id,
+                    "event": "added",
+                    "at": snapshot.get("extracted_at") or _now_iso_microseconds(),
+                }
+                changed = True
+            continue
+
+        old_valid_to = str(previous.get("valid_to") or "")
+        new_valid_to = snapshot.get("valid_to") or ""
+        if not old_valid_to and new_valid_to:
+            ended_event_id = fact_event_id(fact_id, "ended")
+            if ended_event_id and ended_event_id not in events:
+                events[ended_event_id] = {
+                    "event_id": ended_event_id,
+                    "fact_id": fact_id,
+                    "event": "ended",
+                    "at": _now_iso_microseconds(),
+                }
+                changed = True
+
+        if previous != snapshot:
+            known[fact_id] = snapshot
+            changed = True
+
+    for stale_id in list(known.keys()):
+        if stale_id not in current_ids:
+            previous = known.pop(stale_id, None) or {}
+            deleted_event_id = fact_event_id(stale_id, "deleted")
+            if deleted_event_id and deleted_event_id not in events:
+                events[deleted_event_id] = {
+                    "event_id": deleted_event_id,
+                    "fact_id": stale_id,
+                    "event": "deleted",
+                    "at": _now_iso_microseconds(),
+                    "subject": previous.get("subject") or "",
+                    "predicate": previous.get("predicate") or "",
+                    "object": previous.get("object") or "",
+                    "valid_from": previous.get("valid_from") or "",
+                    "valid_to": previous.get("valid_to") or "",
+                    "source_drawer_id": previous.get("source_drawer_id") or "",
+                }
+            changed = True
+
+    if changed:
+        save_fact_events_state(state)
+
+    payloads = [
+        payload
+        for payload in (
+            _fact_event_payload(event, triples_by_id.get(str(event.get("fact_id") or "")))
+            for event in events.values()
+        )
+        if payload
+    ]
+    payloads.sort(key=lambda item: str(item.get("at") or ""), reverse=True)
+    return payloads
+
+
+def mark_fact_event_seen(fact_id: str, event: str) -> str:
+    event_id = fact_event_id(fact_id, event)
+    if event_id:
+        mark_items_seen([event_id])
+    return event_id
+
+
+def fact_ids_for_spo(subject: str, predicate: str, obj: str) -> list[str]:
+    if not KG_DB.exists():
+        return []
+    try:
+        con = sqlite3.connect(KG_DB)
+        rows = con.execute(
+            """
+            select id
+            from triples
+            where subject = ? and predicate = ? and object = ?
+            """,
+            (subject, predicate, obj),
+        ).fetchall()
+        con.close()
+        return [str(row[0]) for row in rows if row and row[0]]
+    except sqlite3.OperationalError:
+        return []
 
 
 def _ingest_updated_at_log_tail(
@@ -1002,6 +1276,8 @@ def read_triples() -> list[dict]:
 def build_payload() -> dict:
     drawers = read_drawers()
     triples = read_triples()
+    fact_events = sync_fact_events(triples)
+    version = palace_version_token()
     wings: dict[str, dict] = {}
     room_counts: Counter[tuple[str, str]] = Counter()
 
@@ -1029,6 +1305,8 @@ def build_payload() -> dict:
         "wings": sorted(wings.values(), key=lambda wing: wing["name"]),
         "drawers": drawers,
         "triples": triples,
+        "fact_events": fact_events,
+        "version": version,
         # Shared seen-state map — piggy-backs on the palace response so
         # every poll picks up notification-dismissal events from any
         # browser/device on the LAN without an extra round trip. Empty
@@ -1288,7 +1566,15 @@ def file_memory(payload: dict, actor: str = "User") -> dict:
         source_file="UI",
         added_by=actor,
     )
-    return {"success": True, "result": result, "wing": wing, "room": room, "title": heading}
+    new_drawer_id = _mark_new_drawer_seen(result)
+    return {
+        "success": True,
+        "result": result,
+        "wing": wing,
+        "room": room,
+        "title": heading,
+        "new_drawer_id": new_drawer_id,
+    }
 
 
 def mempalace_delete_drawer(drawer_id: str) -> dict:
@@ -1571,7 +1857,18 @@ def add_fact(payload: dict) -> dict:
     if source_drawer_id and not source_drawer_id.startswith("drawer_"):
         raise ValueError("source_drawer_id must start with 'drawer_'.")
     result = mempalace_kg_add(subject, predicate, obj, valid_from=valid_from, source_drawer_id=source_drawer_id)
-    return {"success": True, "result": result, "subject": subject, "predicate": predicate, "object": obj}
+    fact_event_ids: list[str] = []
+    fact_id = str(result.get("triple_id") or result.get("id") or "").strip() if isinstance(result, dict) else ""
+    if fact_id:
+        fact_event_ids.append(mark_fact_event_seen(fact_id, "added"))
+    return {
+        "success": True,
+        "result": result,
+        "subject": subject,
+        "predicate": predicate,
+        "object": obj,
+        "fact_event_ids": [eid for eid in fact_event_ids if eid],
+    }
 
 
 def invalidate_fact(payload: dict) -> dict:
@@ -1580,7 +1877,11 @@ def invalidate_fact(payload: dict) -> dict:
     obj = _validate_fact_field("Object", payload.get("object", ""))
     ended = str(payload.get("ended", "")).strip()
     result = mempalace_kg_invalidate(subject, predicate, obj, ended=ended)
-    return {"success": True, "result": result}
+    fact_event_ids = [
+        mark_fact_event_seen(fact_id, "ended")
+        for fact_id in fact_ids_for_spo(subject, predicate, obj)
+    ]
+    return {"success": True, "result": result, "fact_event_ids": [eid for eid in fact_event_ids if eid]}
 
 
 def delete_version(payload: dict) -> dict:
@@ -1994,6 +2295,7 @@ def restore_version(payload: dict) -> dict:
     # the restore is younger than the preserved filed_at by definition).
     if new_drawer_id:
         _record_restored_drawer(new_drawer_id)
+        mark_drawers_seen([new_drawer_id])
     # Audit log entry for the restore action; then consume the original
     # delete/update-before snapshot so trash stops listing it. Behavior
     # parallels the tunnel branch above.
@@ -2044,11 +2346,12 @@ def commit_draft(payload: dict, actor: str = "User") -> dict:
     # disk first — source = "UI", actor = the authenticated dashboard
     # user (e.g. "zhiar"), captured in the request handler.
     result = mempalace_add_drawer(wing=wing, room=room, content=content, source_file="UI", added_by=actor)
+    new_drawer_id = _mark_new_drawer_seen(result)
 
     ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
     archived = ARCHIVE_DIR / path.name
     path.replace(archived)
-    return {"success": True, "result": result, "archived": str(archived)}
+    return {"success": True, "result": result, "archived": str(archived), "new_drawer_id": new_drawer_id}
 
 
 # ---------------------------------------------------------------------------
@@ -2201,9 +2504,76 @@ def diary_write_endpoint(payload: dict) -> dict:
     return mcp_call("tool_diary_write", agent_name=agent, entry=entry, topic=topic, wing=wing)
 
 
+_TUNNELS_CACHE: dict[str, object] = {
+    "signature": None,
+    "items": [],
+}
+
+
+def tunnel_wing_key(wing: str | None) -> str | None:
+    if wing is None:
+        return None
+    wing = str(wing).strip()
+    if not wing:
+        return None
+    return wing.lower().replace(" ", "_").replace("-", "_")
+
+
+def read_tunnels() -> list[dict]:
+    """Fast read-only tunnel listing from MemPalace's tunnels.json.
+
+    The generic MCP path starts a Python subprocess and imports the full
+    MemPalace stack. That is fine for rare Tools actions, but too expensive
+    for the dashboard's routine tunnel-chip refreshes. Explicit tunnels are
+    stored as one small JSON file, so listing can be served locally and cached
+    by mtime+size.
+    """
+    try:
+        st = TUNNELS_FILE.stat()
+    except OSError:
+        _TUNNELS_CACHE["signature"] = None
+        _TUNNELS_CACHE["items"] = []
+        return []
+
+    signature = f"{st.st_mtime_ns}:{st.st_size}"
+    if _TUNNELS_CACHE.get("signature") == signature:
+        return _TUNNELS_CACHE.get("items", [])  # type: ignore[return-value]
+
+    try:
+        data = json.loads(TUNNELS_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        data = []
+    items = data if isinstance(data, list) else []
+    _TUNNELS_CACHE["signature"] = signature
+    _TUNNELS_CACHE["items"] = items
+    return items
+
+
 def list_tunnels_endpoint(query: dict) -> dict:
-    wing = _qs_first(query, "wing")
-    return mcp_call("tool_list_tunnels", wing=wing)
+    wing = tunnel_wing_key(_qs_first(query, "wing"))
+    tunnels = read_tunnels()
+    if wing:
+        tunnels = [
+            t for t in tunnels
+            if isinstance(t, dict)
+            and (tunnel_endpoint_wing(t, "source") == wing or tunnel_endpoint_wing(t, "target") == wing)
+        ]
+    return {"items": tunnels, "version": _TUNNELS_CACHE.get("signature") or ""}
+
+
+def find_tunnel_by_id(tunnel_id: str) -> dict | None:
+    for tunnel in read_tunnels():
+        if not isinstance(tunnel, dict):
+            continue
+        identifier = str(tunnel.get("tunnel_id") or tunnel.get("id") or "")
+        if identifier == tunnel_id:
+            return tunnel
+    return None
+
+
+def tunnel_endpoint_wing(tunnel: dict, side: str) -> str:
+    endpoint = tunnel.get(side) or {}
+    return str(endpoint.get("wing") or "") if isinstance(endpoint, dict) else ""
 
 
 def find_tunnels_endpoint(query: dict) -> dict:
@@ -2243,20 +2613,7 @@ def create_tunnel_endpoint(payload: dict) -> dict:
 
 
 def _find_tunnel(tunnel_id: str) -> dict | None:
-    try:
-        result = mcp_call("tool_list_tunnels")
-    except (RuntimeError, subprocess.TimeoutExpired):
-        return None
-    candidates = result.get("items") or result.get("tunnels") or []
-    if not isinstance(candidates, list):
-        return None
-    for tunnel in candidates:
-        if not isinstance(tunnel, dict):
-            continue
-        identifier = str(tunnel.get("tunnel_id") or tunnel.get("id") or "")
-        if identifier == tunnel_id:
-            return tunnel
-    return None
+    return find_tunnel_by_id(tunnel_id)
 
 
 def log_tunnel_version(action: str, tunnel: dict) -> None:
@@ -2456,6 +2813,9 @@ class Handler(SimpleHTTPRequestHandler):
                 return
             if parsed.path == "/api/palace":
                 self.respond_json(build_payload())
+                return
+            if parsed.path == "/api/palace-version":
+                self.respond_json({"version": palace_version_token()})
                 return
             if parsed.path == "/api/search":
                 query = parse_qs(parsed.query).get("q", [""])[0]
@@ -2692,17 +3052,18 @@ class Handler(SimpleHTTPRequestHandler):
                 self.respond_json({"preferences": updated})
                 return
             if parsed.path == "/api/seen":
-                # Body: {drawer_ids: [...], seen_at?: iso}. Stamps each
-                # id with seen_at (or now) in the shared map and
-                # persists to dashboard-seen.json. Returns the updated
-                # map so the calling client doesn't have to re-fetch
-                # to confirm the write landed.
+                # Body: {item_ids: [...], seen_at?: iso}; legacy
+                # {drawer_ids: [...]} still works. Stamps each id with
+                # seen_at (or now) in the shared map and persists to
+                # dashboard-seen.json. Returns the updated map so the
+                # calling client doesn't have to re-fetch to confirm
+                # the write landed.
                 body = self.read_json() or {}
-                ids = body.get("drawer_ids") or []
+                ids = body.get("item_ids") or body.get("drawer_ids") or []
                 if not isinstance(ids, list):
                     ids = []
                 seen_at = body.get("seen_at") if isinstance(body.get("seen_at"), str) else None
-                updated = mark_drawers_seen([str(i) for i in ids if i], seen_at)
+                updated = mark_items_seen([str(i) for i in ids if i], seen_at)
                 self.respond_json({"seen": updated})
                 return
             if parsed.path == "/api/settings/credentials":

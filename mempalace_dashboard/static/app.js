@@ -161,7 +161,13 @@ const state = {
   _lastNotifCount: -1,
   _lastFailureCount: 0,
   _lastNotifSoundAt: 0,
-  // Shared seen-state map — drawer_id → ISO seen-at timestamp.
+  // Last /api/palace version token applied to state.palace. Background
+  // notification polls compare against /api/palace-version and only fetch
+  // the full palace payload when one of its source files changed.
+  _palaceVersion: "",
+  // Shared seen-state map — notification item id → ISO seen-at timestamp.
+  // Drawer notifications use their drawer_id directly; fact lifecycle
+  // notifications use fact:<fact_id>:added / fact:<fact_id>:ended.
   // Populated from /api/palace.seen on every poll so notification-
   // dismissal syncs across every LAN client. Local mutations via
   // markDrawerSeen / markDrawersSeen update this immediately + fire
@@ -280,6 +286,7 @@ const els = {
   factsGraph: document.querySelector("#factsGraph"),
   factsViewList: document.querySelector("#factsViewList"),
   factsViewGraph: document.querySelector("#factsViewGraph"),
+  factStats: document.querySelector("#factStats"),
   footerInfo: document.querySelector("#footerInfo"),
   factCount: document.querySelector("#factCount"),
   searchInput: document.querySelector("#searchInput"),
@@ -1259,6 +1266,57 @@ function applyHash() {
   state.applyingHash = false;
 }
 
+// ---------- localStorage JSON primitives ----------
+// Every cache below (palace, tunnels, seen-map) is the same shape: JSON
+// in / JSON out, wrapped in a try/catch because storage can be disabled,
+// full (QuotaExceeded), or private-mode. These two helpers hold that
+// boilerplate once; the named caches just add their key + shape check.
+// Writes fail silently (caching is a pure optimization); reads return
+// `fallback` (default null) on missing/corrupt/parse-error.
+function lsWriteJson(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // Storage disabled / quota / private-mode — skip silently.
+  }
+}
+
+function lsReadJson(key, fallback = null) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return fallback;
+    return JSON.parse(raw);
+  } catch {
+    return fallback;
+  }
+}
+
+// ---------- DOM event wiring ----------
+// Collapses the `const x = document.querySelector("#id"); if (x)
+// x.addEventListener(event, handler)` guard that recurs ~60× across the
+// boot-time control wiring. Looks the element up by id, binds the
+// listener only when it exists, and RETURNS the element (or null) so
+// callers that reference it (e.g. `el.checked` inside the handler, or
+// later setup) keep their reference: `const el = on("id", "change", …)`.
+// `opts` passes through to addEventListener (capture / passive / once).
+function on(id, event, handler, opts) {
+  const el = document.querySelector("#" + id);
+  if (el) el.addEventListener(event, handler, opts);
+  return el;
+}
+
+// ---------- card-list cache invalidation ----------
+// Drop the cached virtualized card-list HTML and reset the visible-
+// window indices so the next render rebuilds the card slice from
+// scratch. Called wherever something the cached markup or the window
+// math depends on changes (sort, content edits, date-format / polish
+// prefs, etc.). The exact 3-line reset recurred ~9× before this.
+function invalidateCardCache() {
+  state._virtCardsHtml = null;
+  state._lastStartIdx = -1;
+  state._lastEndIdx = -1;
+}
+
 // ---------- palace localStorage cache ----------
 // Persist the last successfully-fetched palace payload so the NEXT page
 // load can render memories INSTANTLY from it — before the network fetch
@@ -1270,32 +1328,19 @@ function applyHash() {
 const PALACE_CACHE_KEY = "apricity-palace-cache-v1";
 
 function writePalaceCache(palace) {
-  try {
-    // Stamp it so a future read can age it out / debug staleness. We do
-    // NOT gate reads on the timestamp (the background fetch always wins
-    // within ~1ms here), but keeping it is cheap and useful.
-    const blob = JSON.stringify({ ts: Date.now(), palace });
-    localStorage.setItem(PALACE_CACHE_KEY, blob);
-  } catch {
-    // QuotaExceeded / private-mode / disabled storage — caching is a
-    // pure optimization, so silently skip. The app works without it.
-  }
+  // Stamp it so a future read can age it out / debug staleness. We do
+  // NOT gate reads on the timestamp (the background fetch always wins
+  // within ~1ms here), but keeping it is cheap and useful.
+  lsWriteJson(PALACE_CACHE_KEY, { ts: Date.now(), palace });
 }
 
 function readPalaceCache() {
-  try {
-    const raw = localStorage.getItem(PALACE_CACHE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    const palace = parsed && parsed.palace;
-    // Minimal shape check — a cache from an older schema that lacks
-    // drawers would render a broken empty list, so reject it and let
-    // the live fetch populate instead.
-    if (palace && Array.isArray(palace.drawers)) return palace;
-    return null;
-  } catch {
-    return null;
-  }
+  const parsed = lsReadJson(PALACE_CACHE_KEY);
+  const palace = parsed && parsed.palace;
+  // Minimal shape check — a cache from an older schema that lacks
+  // drawers would render a broken empty list, so reject it and let
+  // the live fetch populate instead.
+  return (palace && Array.isArray(palace.drawers)) ? palace : null;
 }
 
 // ---------- tunnels localStorage cache ----------
@@ -1310,22 +1355,12 @@ function readPalaceCache() {
 const TUNNELS_CACHE_KEY = "apricity-tunnels-cache-v1";
 
 function writeTunnelsCache(items) {
-  try {
-    localStorage.setItem(TUNNELS_CACHE_KEY, JSON.stringify({ ts: Date.now(), items: items || [] }));
-  } catch {
-    // Storage unavailable — pure optimization, skip silently.
-  }
+  lsWriteJson(TUNNELS_CACHE_KEY, { ts: Date.now(), items: items || [] });
 }
 
 function readTunnelsCache() {
-  try {
-    const raw = localStorage.getItem(TUNNELS_CACHE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    return parsed && Array.isArray(parsed.items) ? parsed.items : null;
-  } catch {
-    return null;
-  }
+  const parsed = lsReadJson(TUNNELS_CACHE_KEY);
+  return (parsed && Array.isArray(parsed.items)) ? parsed.items : null;
 }
 
 // ---------- seen-map localStorage cache ----------
@@ -1342,24 +1377,14 @@ function readTunnelsCache() {
 const SEEN_CACHE_KEY = "apricity-seen-cache-v1";
 
 function writeSeenCache() {
-  try {
-    if (state._seenMap && typeof state._seenMap === "object") {
-      localStorage.setItem(SEEN_CACHE_KEY, JSON.stringify(state._seenMap));
-    }
-  } catch {
-    // Storage unavailable — pure optimization, skip silently.
+  if (state._seenMap && typeof state._seenMap === "object") {
+    lsWriteJson(SEEN_CACHE_KEY, state._seenMap);
   }
 }
 
 function readSeenCache() {
-  try {
-    const raw = localStorage.getItem(SEEN_CACHE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === "object" ? parsed : null;
-  } catch {
-    return null;
-  }
+  const parsed = lsReadJson(SEEN_CACHE_KEY);
+  return (parsed && typeof parsed === "object") ? parsed : null;
 }
 
 // ---------- palace load ----------
@@ -1380,6 +1405,9 @@ async function loadPalace(prefetched) {
     ? loadTunnels().catch(() => {})
     : null;
   state.palace = prefetched || await fetchJson("/api/palace");
+  if (state.palace && state.palace.version) {
+    state._palaceVersion = String(state.palace.version);
+  }
   // Hydrate the LAN-shared seen-state map from the palace response
   // before render so isRecentlyUpdated / bell counts reflect the
   // canonical server view. Any local optimistic writes that haven't
@@ -1399,19 +1427,25 @@ async function loadPalace(prefetched) {
   if (!prefetched && state.palace) writePalaceCache(state.palace);
   reconcileSelection();
   // Await the parallel tunnels fetch (already in flight) so the first
-  // render has the chip. On poll refreshes (tunnelsLoaded already
-  // true) we refresh tunnels in the background instead of blocking.
+  // render has the chip. After tunnels have loaded, routine palace
+  // refreshes check them in the background; /api/tunnels is now a cheap
+  // mtime-cached file read and loadTunnels bails without rendering when
+  // the version is unchanged.
   if (tunnelsPromise) {
     await tunnelsPromise;
-  } else {
-    loadTunnels().catch(() => {});
   }
   render();
+  if (!tunnelsPromise) loadTunnels().catch(() => {});
   // Drafts count + system info are non-critical chrome — fire after
   // the first paint so they never delay it. Each re-renders its own
   // small piece (badge / footer) when it resolves.
   refreshDraftsCount().catch(() => {});
   loadSystemInfo().catch(() => {});
+}
+
+async function fetchPalaceVersion() {
+  const raw = await fetchJson("/api/palace-version");
+  return raw && raw.version ? String(raw.version) : "";
 }
 
 // ---------- tunnel cache ----------
@@ -1440,7 +1474,12 @@ async function loadTunnels() {
     return;
   }
   const items = (raw && (raw.tunnels || raw.items || raw.results)) || [];
+  const version = raw && raw.version ? String(raw.version) : "";
+  if (state.tunnelsLoaded && version && state._tunnelsVersion === version) {
+    return;
+  }
   applyTunnelItems(items);
+  state._tunnelsVersion = version;
   // Cache the raw list so the NEXT reload's instant cache-paint can draw
   // the tunnel indicators immediately instead of popping them in late.
   writeTunnelsCache(items);
@@ -2083,9 +2122,7 @@ function renderRooms(_drawers) {
   });
 
   // Back button (rooms view only): backward slide → wings view.
-  const backBtn = document.querySelector("#roomsNavBackBtn");
-  if (backBtn) {
-    backBtn.addEventListener("click", () => {
+  const backBtn = on("roomsNavBackBtn", "click", () => {
       state.selectedWing = "all";
       state.selectedRoom = "all";
       state.detailOverride = null;
@@ -2093,7 +2130,6 @@ function renderRooms(_drawers) {
       state.roomsPanelDirection = "backward";
       render();
     });
-  }
 
   // Room items (rooms view): narrow to a specific room.
   els.roomNav.querySelectorAll(".room-item").forEach((btn) => {
@@ -2149,14 +2185,21 @@ function applyRoomsNavTransition(currentView) {
 // formatTimestamp ("25 May 2026"), but without the trailing HH:MM since
 // the kicker is space-constrained and the time is already visible on
 // the detail side when the user opens the memory.
-function formatDate(iso) {
-  if (!iso) return "";
+// Parse an ISO string to a Date, or null when it's empty/invalid. The
+// date formatters share this guard so the "" (empty in) / passthrough-
+// raw-iso (invalid in) fallback behaviour stays identical across them.
+function parseIso(iso) {
+  if (!iso) return null;
   const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function formatDate(iso) {
+  const d = parseIso(iso);
+  if (!d) return iso || "";
   const day = String(d.getDate()).padStart(2, "0");
   const month = FORMAT_TS_MONTHS[d.getMonth()];
-  const year = d.getFullYear();
-  return `${day} ${month} ${year}`;
+  return `${day} ${month} ${d.getFullYear()}`;
 }
 
 // Normalize a stored drawer title for display: strips trailing
@@ -2243,15 +2286,11 @@ function cleanForPreview(content, title) {
 // the input isn't a parseable date.
 const FORMAT_TS_MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 function formatTimestamp(iso) {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  const day = String(d.getDate()).padStart(2, "0");
-  const month = FORMAT_TS_MONTHS[d.getMonth()];
-  const year = d.getFullYear();
+  const d = parseIso(iso);
+  if (!d) return iso || "";
   const hours = String(d.getHours()).padStart(2, "0");
   const minutes = String(d.getMinutes()).padStart(2, "0");
-  return `${day} ${month} ${year} – ${hours}:${minutes}`;
+  return `${formatDate(iso)} – ${hours}:${minutes}`;
 }
 
 // ---------- Drawer-list virtualization ----------
@@ -2286,8 +2325,10 @@ const VIRT_BUFFER = 4;                // extra rows rendered above/below the vis
  * scale of a working session, not on the scale of days. */
 const RECENT_UPDATE_MS = 12 * 60 * 60 * 1000;
 
-/** Shared seen-state map — {drawer_id → ISO-timestamp} of when the
- * user last marked each drawer as seen. SERVER-SIDE since 2026-05-28:
+/** Shared seen-state map — {notification_id → ISO-timestamp} of when the
+ * user last marked each bell item as seen. Drawer notifications use the
+ * drawer_id itself; fact lifecycle notifications use fact:<id>:added /
+ * fact:<id>:ended. SERVER-SIDE since 2026-05-28:
  * lives in ~/.mempalace/dashboard-seen.json on the Pi so notification-
  * dismissal syncs across every browser/device hitting this dashboard
  * on the LAN. Same mental model as iOS Mail's unread dot disappearing
@@ -2313,9 +2354,9 @@ function readSeenAtMap() {
  * response (updated map) replaces the local cache so any concurrent
  * server-side change is picked up. Errors are silent — local cache is
  * already updated optimistically; next palace poll reconciles. */
-function _persistSeenToServer(drawerIds) {
-  if (!drawerIds || !drawerIds.length) return;
-  postJson("/api/seen", { drawer_ids: drawerIds })
+function _persistSeenToServer(itemIds) {
+  if (!itemIds || !itemIds.length) return;
+  postJson("/api/seen", { item_ids: itemIds })
     .then((resp) => {
       if (resp && resp.seen && typeof resp.seen === "object") {
         state._seenMap = resp.seen;
@@ -2341,6 +2382,14 @@ function markDrawerSeen(drawerId) {
   // the stale one baked into the (less-frequently-written) palace cache.
   writeSeenCache();
   _persistSeenToServer([drawerId]);
+}
+
+function markFactEventSeen(eventId) {
+  if (!eventId) return;
+  if (!state._seenMap) state._seenMap = {};
+  state._seenMap[eventId] = new Date().toISOString();
+  writeSeenCache();
+  _persistSeenToServer([eventId]);
 }
 
 /** Position the tunnel-bind card so its bottom edge sits ~16px ABOVE
@@ -2691,15 +2740,14 @@ function clearDrawerNavStack() {
   }
 }
 
-/** Stamp every drawer in `drawerIds` as seen in one server round trip.
- * Used by the bulk-clear affordance (Mark-all-as-seen in the bell +
- * Settings → Notifications). */
-function markDrawersSeen(drawerIds) {
-  if (!Array.isArray(drawerIds) || !drawerIds.length) return;
+/** Stamp every notification item in `itemIds` as seen in one server
+ * round trip. Used by bulk-clear affordances. */
+function markNotificationItemsSeen(itemIds) {
+  if (!Array.isArray(itemIds) || !itemIds.length) return;
   if (!state._seenMap) state._seenMap = {};
   const now = new Date().toISOString();
   const realIds = [];
-  for (const id of drawerIds) {
+  for (const id of itemIds) {
     if (id) {
       state._seenMap[id] = now;
       realIds.push(id);
@@ -2707,6 +2755,10 @@ function markDrawersSeen(drawerIds) {
   }
   writeSeenCache();
   _persistSeenToServer(realIds);
+}
+
+function markDrawersSeen(drawerIds) {
+  markNotificationItemsSeen(drawerIds);
 }
 
 /** Per-actor avatar spec for the notification bell.
@@ -2787,6 +2839,45 @@ function isRecentlyUpdated(drawer) {
     if (!Number.isNaN(seenAt) && seenAt >= updated) return false;
   }
   return true;
+}
+
+function factEventSeenKey(event) {
+  if (!event) return "";
+  if (event.event_id) return String(event.event_id);
+  if (event.fact_id && event.event) return `fact:${event.fact_id}:${event.event}`;
+  return "";
+}
+
+function factEventTimestamp(event) {
+  return event && (event.at || event.extracted_at || event.valid_to || "");
+}
+
+function isRecentlyFactEvent(event) {
+  const key = factEventSeenKey(event);
+  const atIso = factEventTimestamp(event);
+  if (!key || !atIso) return false;
+  const at = Date.parse(atIso);
+  if (Number.isNaN(at)) return false;
+  if ((Date.now() - at) >= RECENT_UPDATE_MS) return false;
+  const seenIso = readSeenAtMap()[key];
+  if (seenIso) {
+    const seenAt = Date.parse(seenIso);
+    if (!Number.isNaN(seenAt) && seenAt >= at) return false;
+  }
+  return true;
+}
+
+function factEventTitle(event) {
+  const parts = [event.subject, event.predicate, event.object]
+    .map(prettifyFactValue)
+    .filter(Boolean);
+  return parts.join(" ");
+}
+
+function factEventMetaLabel(event) {
+  if (event && event.event === "deleted") return "Fact deleted";
+  if (event && event.event === "ended") return "Fact ended";
+  return "Fact added";
 }
 
 /** Format an ISO timestamp as a short relative phrase ("2h ago",
@@ -3228,17 +3319,13 @@ function renderDrawers() {
   if (!state.palace.drawers.length) {
     els.drawerList.innerHTML = `<div class="empty-list"><strong>No memories yet.</strong><br/>Click <em>Write</em> to add the first one.</div>`;
     state._virtDrawers = null;
-    state._virtCardsHtml = null;
-    state._lastStartIdx = -1;
-    state._lastEndIdx = -1;
+    invalidateCardCache();
     return;
   }
   if (!drawers.length) {
     els.drawerList.innerHTML = `<div class="empty-list">No memories match your current filters.</div>`;
     state._virtDrawers = null;
-    state._virtCardsHtml = null;
-    state._lastStartIdx = -1;
-    state._lastEndIdx = -1;
+    invalidateCardCache();
     return;
   }
 
@@ -4145,9 +4232,63 @@ function prettifyFactValue(value) {
     .trim();
 }
 
+function factLifecycleLabel(fact) {
+  return fact && fact.valid_to ? "Ended" : "Active";
+}
+
+function factDateLabel(fact) {
+  if (!fact) return "Undated";
+  const from = String(fact.valid_from || "").trim();
+  const to = String(fact.valid_to || "").trim();
+  if (from && to) return `${from} to ${to}`;
+  if (from) return `Since ${from}`;
+  if (to) return `Ended ${to}`;
+  return "Undated";
+}
+
+function renderFactStats(facts) {
+  if (!els.factStats) return;
+  const active = facts.filter((fact) => !fact.valid_to).length;
+  const ended = facts.length - active;
+  const entities = new Set();
+  const predicates = new Set();
+  facts.forEach((fact) => {
+    if (fact.subject) entities.add(String(fact.subject));
+    if (fact.object) entities.add(String(fact.object));
+    if (fact.predicate) predicates.add(String(fact.predicate));
+  });
+  const stats = [
+    ["Active", active],
+    ["Ended", ended],
+    ["Entities", entities.size],
+    ["Relations", predicates.size],
+  ];
+  els.factStats.innerHTML = stats
+    .map(([label, value]) => `<div class="fact-stat"><strong>${value}</strong><span>${label}</span></div>`)
+    .join("");
+}
+
+function openFactSourceDrawer(drawerId) {
+  const drawer = drawerById(drawerId);
+  if (!drawer) return false;
+  clearDrawerNavStack();
+  state.detailOverride = null;
+  state.detailDismissed = false;
+  state.detailDirection = "forward";
+  state.selectedWing = drawer.wing;
+  state.selectedRoom = drawer.room;
+  state.selectedDrawerId = drawer.drawer_id;
+  state.query = "";
+  if (els.searchInput) els.searchInput.value = "";
+  render();
+  writeHash();
+  return true;
+}
+
 function renderFacts() {
   const facts = filteredFacts();
-  els.factCount.textContent = `${facts.length} visible`;
+  els.factCount.textContent = `${facts.length} ${facts.length === 1 ? "relation" : "relations"}`;
+  renderFactStats(facts);
   if (els.factsViewList && els.factsViewGraph) {
     const isGraph = state.factsView === "graph";
     els.factsViewList.classList.toggle("active", !isGraph);
@@ -4168,20 +4309,61 @@ function renderFacts() {
   els.facts.innerHTML = facts
     .map((fact) => {
       const expired = fact.valid_to ? "expired" : "";
+      const sourceDrawer = fact.source_drawer_id ? drawerById(fact.source_drawer_id) : null;
+      const sourceTitle = sourceDrawer ? cleanTitle(sourceDrawer.title || sourceDrawer.drawer_id) : "";
+      const sourceLabel = sourceTitle ? `Source: ${sourceTitle}` : "No source drawer";
+      const lifecycle = factLifecycleLabel(fact);
       // Display values are prettified (underscores → spaces); the
       // invalidate payload uses the RAW stored values so the server
       // lookup matches exactly.
+      // Each relationship renders as a single flowing line — subject and
+      // object carry the visual weight (they're the entities); the
+      // predicate is quiet connective text with a direction arrow. This
+      // replaces the old three-box "flung to the corners" layout that
+      // read as cluttered. Rows live inside one grouped surface (see
+      // .facts in styles.css) Apple-grouped-list style, so the section
+      // reads as a sibling of the cleaner panels above it.
       return `<div class="fact ${expired}" data-fact-id="${escapeHtml(String(fact.id))}">
-        <span>${escapeHtml(prettifyFactValue(fact.subject))}</span>
-        <strong>${escapeHtml(prettifyFactValue(fact.predicate))}</strong>
-        <span>${escapeHtml(prettifyFactValue(fact.object))}</span>
-        <em>${escapeHtml(fact.valid_from || "undated")}${fact.valid_to ? " → " + escapeHtml(fact.valid_to) : ""}</em>
+        <div class="fact-body">
+          <div class="fact-line">
+            <span class="fact-term">${escapeHtml(prettifyFactValue(fact.subject))}</span>
+            <span class="fact-rel">
+              <span class="fact-rel-label">${escapeHtml(prettifyFactValue(fact.predicate))}</span>
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M5 12h13M14 8l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </span>
+            <span class="fact-term">${escapeHtml(prettifyFactValue(fact.object))}</span>
+          </div>
+          <div class="fact-meta">
+            <span class="fact-status ${fact.valid_to ? "is-ended" : "is-active"}">${lifecycle}</span>
+            <span class="fact-meta-item">${escapeHtml(factDateLabel(fact))}</span>
+            <span class="fact-meta-item">${escapeHtml(sourceLabel)}</span>
+          </div>
+        </div>
         <div class="fact-actions">
-          ${fact.valid_to ? "" : `<button class="icon-button" type="button" data-invalidate-fact='${escapeHtml(JSON.stringify({ subject: fact.subject, predicate: fact.predicate, object: fact.object }))}' title="Mark as no longer true">End</button>`}
+          ${sourceDrawer ? `<button class="fact-action" type="button" data-open-source-drawer="${escapeHtml(fact.source_drawer_id)}" title="Open source memory" aria-label="Open source memory">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M5 5h14v14H5z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+              <path d="M9 15 15 9M11 9h4v4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            <span>Open</span>
+          </button>` : ""}
+          ${fact.valid_to ? "" : `<button class="fact-action fact-action-end" type="button" data-invalidate-fact='${escapeHtml(JSON.stringify({ subject: fact.subject, predicate: fact.predicate, object: fact.object }))}' title="Mark as no longer true" aria-label="Mark as no longer true">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+            <span>End</span>
+          </button>`}
         </div>
       </div>`;
     })
     .join("");
+  els.facts.querySelectorAll("[data-open-source-drawer]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      openFactSourceDrawer(btn.dataset.openSourceDrawer);
+    });
+  });
   els.facts.querySelectorAll("[data-invalidate-fact]").forEach((btn) => {
     btn.addEventListener("click", async () => {
       btn.disabled = true;
@@ -4230,7 +4412,6 @@ const kg = {
   svg: null,
   edgesG: null,
   nodesG: null,
-  hint: null,
   legend: null,
   legendText: null,
   resetBtn: null,
@@ -4423,12 +4604,6 @@ function kgEnsureMount(container) {
   const nodesG = svgEl("g", { class: "kg-nodes" });
   svg.append(edgesG, nodesG);
   stage.appendChild(svg);
-  wrap.appendChild(stage);
-
-  const hint = document.createElement("div");
-  hint.className = "kg-hint";
-  hint.textContent = "Click a node to focus · drag to reposition · scroll to zoom · double-click to reset";
-  wrap.appendChild(hint);
 
   const legend = document.createElement("div");
   legend.className = "kg-legend";
@@ -4436,9 +4611,14 @@ function kgEnsureMount(container) {
   const resetBtn = document.createElement("button");
   resetBtn.type = "button";
   resetBtn.className = "kg-reset hidden";
-  resetBtn.textContent = "Reset view";
+  resetBtn.title = "Reset view";
+  resetBtn.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">
+    <path d="M5 12a7 7 0 1 0 2-4.9" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
+    <path d="M5 5v5h5" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg><span>Reset</span>`;
   legend.append(legendText, resetBtn);
   wrap.appendChild(legend);
+  wrap.appendChild(stage);
 
   container.appendChild(wrap);
 
@@ -4446,7 +4626,6 @@ function kgEnsureMount(container) {
   kg.svg = svg;
   kg.edgesG = edgesG;
   kg.nodesG = nodesG;
-  kg.hint = hint;
   kg.legend = legend;
   kg.legendText = legendText;
   kg.resetBtn = resetBtn;
@@ -4795,8 +4974,8 @@ function renderFactsGraph(facts) {
   if (!els.factsGraph) return;
   const active = facts.filter((f) => !f.valid_to);
   if (!active.length) {
+    els.factsGraph.innerHTML = "";
     if (kg.mounted) {
-      els.factsGraph.innerHTML = "";
       kg.mounted = false;
       kg.signature = "";
     }
@@ -5001,11 +5180,32 @@ els.sortSelect.addEventListener("change", () => {
 // the dropdown happens via closeMenus() since the click escapes the
 // .action-menu boundary (state changes + render() rebuild the menu
 // content anyway).
-const notificationsList = document.querySelector("#notificationsList");
-if (notificationsList) {
-  notificationsList.addEventListener("click", (event) => {
+  const notificationsList = on("notificationsList", "click", (event) => {
     const item = event.target.closest(".notif-item");
     if (!item) return;
+    const factEventId = item.dataset.notifFactId;
+    if (factEventId) {
+      markFactEventSeen(factEventId);
+      const sourceDrawer = item.dataset.notifSourceDrawerId
+        ? drawerById(item.dataset.notifSourceDrawerId)
+        : null;
+      clearDrawerNavStack();
+      state.detailOverride = null;
+      state.detailDismissed = false;
+      if (sourceDrawer) {
+        state.selectedWing = sourceDrawer.wing;
+        state.selectedRoom = sourceDrawer.room;
+        state.selectedDrawerId = sourceDrawer.drawer_id;
+        state.query = "";
+      } else {
+        state.selectedDrawerId = null;
+        state.query = item.dataset.notifFactQuery || "";
+      }
+      if (els.searchInput) els.searchInput.value = state.query;
+      closeMenus();
+      render();
+      return;
+    }
     const drawerId = item.dataset.notifDrawerId;
     if (!drawerId) return;
     const drawer = drawerById(drawerId);
@@ -5054,33 +5254,32 @@ if (notificationsList) {
       writeHash();
     }
   });
-}
 
 // Mark-all-as-seen button at the bottom of the notification panel.
-// Stamps every CURRENTLY-recently-updated drawer's seenAt to now AND
+// Stamps every CURRENTLY-visible info notification's seenAt to now AND
 // clears every failed-save entry. The bulk-acknowledge semantic
 // covers both notification kinds so one click takes the bell to
 // fully-empty. The Settings version of this action stamps EVERY
 // drawer (heavier hammer); this in-panel button is scoped to "the
 // things showing in the bell right now."
-const notificationsMarkAll = document.querySelector("#notificationsMarkAll");
-if (notificationsMarkAll) {
-  notificationsMarkAll.addEventListener("click", () => {
+const notificationsMarkAll = on("notificationsMarkAll", "click", () => {
     if (!state.palace || !Array.isArray(state.palace.drawers)) return;
-    const ids = state.palace.drawers
+    const drawerIds = state.palace.drawers
       .filter(isRecentlyUpdated)
       .map((d) => d.drawer_id);
-    if (ids.length) markDrawersSeen(ids);
+    const factIds = ((state.palace && Array.isArray(state.palace.fact_events)) ? state.palace.fact_events : [])
+      .filter(isRecentlyFactEvent)
+      .map(factEventSeenKey)
+      .filter(Boolean);
+    const ids = drawerIds.concat(factIds);
+    if (ids.length) markNotificationItemsSeen(ids);
     // Clear failure entries too — same bulk-acknowledge intent.
     state.failedSaves = [];
     // Cache-invalidation dance so the next render rebuilds card
     // HTML without any .is-updated flags + clean badge state.
-    state._virtCardsHtml = null;
-    state._lastStartIdx = -1;
-    state._lastEndIdx = -1;
+    invalidateCardCache();
     render();
   });
-}
 
 // ---------- status helpers ----------
 function setStatus(node, message, type = "") {
@@ -5561,9 +5760,7 @@ async function confirmDelete() {
       // without the just-deleted card.
       state.palace.drawers.splice(idx, 1);
       if (wasSelected) state.selectedDrawerId = null;
-      state._virtCardsHtml = null;
-      state._lastStartIdx = -1;
-      state._lastEndIdx = -1;
+      invalidateCardCache();
       state._filteredDrawersCache = null;
       render();
       writeHash();
@@ -5596,9 +5793,7 @@ async function confirmDelete() {
             room: snapshot.drawer.room,
             error: `Delete failed: ${(error && error.message) || "unknown error"}`,
           });
-          state._virtCardsHtml = null;
-          state._lastStartIdx = -1;
-          state._lastEndIdx = -1;
+          invalidateCardCache();
           state._filteredDrawersCache = null;
           render();
         });
@@ -6049,9 +6244,7 @@ async function commitEditMode() {
       });
       // Invalidate card-html cache so the reverted state propagates
       // through the virtualized window on the next render.
-      state._virtCardsHtml = null;
-      state._lastStartIdx = -1;
-      state._lastEndIdx = -1;
+      invalidateCardCache();
       render();
     });
 }
@@ -7568,9 +7761,7 @@ async function openTrashSheet() {
         // Close the trash sheet immediately and re-render so the
         // placeholder appears in the main list right away.
         dismissSheet(els.trashSheet, () => setTrashStatus(""));
-        state._virtCardsHtml = null;
-        state._lastStartIdx = -1;
-        state._lastEndIdx = -1;
+        invalidateCardCache();
         state._filteredDrawersCache = null;
         render();
         // BACKGROUND RESTORE. On success: swap placeholder id for the
@@ -7598,9 +7789,7 @@ async function openTrashSheet() {
             }
             return loadPalace().then(() => {
               if (realId) markDrawerSeen(realId);
-              state._virtCardsHtml = null;
-              state._lastStartIdx = -1;
-              state._lastEndIdx = -1;
+              invalidateCardCache();
               state._filteredDrawersCache = null;
               render();
             });
@@ -7624,9 +7813,7 @@ async function openTrashSheet() {
               room: placeholder.room,
               error: `Restore failed: ${(error && error.message) || "unknown error"}`,
             });
-            state._virtCardsHtml = null;
-            state._lastStartIdx = -1;
-            state._lastEndIdx = -1;
+            invalidateCardCache();
             state._filteredDrawersCache = null;
             render();
           });
@@ -7983,8 +8170,7 @@ async function exportPalace() {
   }
 }
 
-const exportBtn = document.querySelector("#exportBtn");
-if (exportBtn) exportBtn.addEventListener("click", exportPalace);
+const exportBtn = on("exportBtn", "click", exportPalace);
 
 async function importPalace(file) {
   const status = document.querySelector("#exportStatus");
@@ -8666,9 +8852,7 @@ els.factForm.addEventListener("submit", saveFact);
 // the panel. Also clears detailEnlarged so re-opening a memory
 // doesn't drop into a leftover full-screen view. detailDismissed
 // re-arms on the next nav click.
-const detailPanelClose = document.querySelector("#detailPanelClose");
-if (detailPanelClose) {
-  detailPanelClose.addEventListener("click", () => {
+const detailPanelClose = on("detailPanelClose", "click", () => {
     // Discard any in-flight edit when the user closes the panel —
     // otherwise re-opening the same memory from the main list would
     // drop them back into a stale editing session with the old
@@ -8687,7 +8871,6 @@ if (detailPanelClose) {
     render();
     writeHash();
   });
-}
 
 // Floating maximize / minimize button between the close X and the
 // edit pencil. Toggles state.detailEnlarged and re-applies the grid
@@ -8697,9 +8880,7 @@ if (detailPanelClose) {
 // class, so there's nothing for the JS to update on the button itself.
 // aria-label is updated so screen readers know what the toggle does
 // in each state.
-const detailPanelMaximize = document.querySelector("#detailPanelMaximize");
-if (detailPanelMaximize) {
-  detailPanelMaximize.addEventListener("click", () => {
+const detailPanelMaximize = on("detailPanelMaximize", "click", () => {
     // If the inline editor is open, this button doubles as an "exit edit
     // mode" affordance. Opening the editor auto-maximizes the panel (see
     // the E shortcut / edit pencil), so the natural gesture to leave is
@@ -8737,7 +8918,6 @@ if (detailPanelMaximize) {
     // Persist enlarged state to the URL so refresh keeps the layout.
     writeHash();
   });
-}
 
 // Browse-mode toggle on the Memories panel. Same pattern as the
 // detail maximize handler — flip state, sync the button's a11y
@@ -8748,9 +8928,7 @@ if (detailPanelMaximize) {
 // the layout transitions cleanly even from the detail-enlarged
 // state (which, given mutual exclusion in updateGridLayout, only
 // happens transiently mid-state-change).
-const drawersPanelMaximize = document.querySelector("#drawersPanelMaximize");
-if (drawersPanelMaximize) {
-  drawersPanelMaximize.addEventListener("click", () => {
+const drawersPanelMaximize = on("drawersPanelMaximize", "click", () => {
     // Adaptive-browse guard: when the filtered list is below the
     // hide threshold, the toggle is .is-hidden + pointer-events:none
     // (CSS handles user clicks). But programmatic invocations —
@@ -8867,7 +9045,6 @@ if (drawersPanelMaximize) {
       renderDrawerWindow();
     }
   });
-}
 
 // Floating delete (trash) button in the top-right action cluster.
 // updateGridLayout keeps the dataset shaped for deleteRequestFromButton
@@ -8875,9 +9052,7 @@ if (drawersPanelMaximize) {
 // click into the same openDeleteSheet path the Backspace shortcut and
 // the action-menu trash item use, so the confirmation modal is the
 // single source of truth for actually destroying the memory.
-const detailPanelDelete = document.querySelector("#detailPanelDelete");
-if (detailPanelDelete) {
-  detailPanelDelete.addEventListener("click", (event) => {
+const detailPanelDelete = on("detailPanelDelete", "click", (event) => {
     // CRITICAL: stop propagation so the document-level delegated
     // delete-scope handler (line ~4990) doesn't ALSO fire for this
     // click. Without this, the chain becomes:
@@ -8912,7 +9087,6 @@ if (detailPanelDelete) {
     const request = deleteRequestFromButton(detailPanelDelete);
     if (request) openDeleteSheet(request);
   });
-}
 
 // Click-pop tactile feedback for the floating edit + delete buttons —
 // brief scale-up keyframe via the .clicked-pop class. Same pattern as
@@ -8939,9 +9113,7 @@ if (detailPanelDelete) {
 // failure: re-push the failure with a fresh timestamp + new error
 // message so the bell stays red and the user can see what went wrong
 // this time.
-const detailPanelRetry = document.querySelector("#detailPanelRetry");
-if (detailPanelRetry) {
-  detailPanelRetry.addEventListener("click", async () => {
+const detailPanelRetry = on("detailPanelRetry", "click", async () => {
     const drawerId = detailPanelRetry.dataset.retryDrawerId;
     if (!drawerId) return;
     const failure = (state.failedSaves || []).find((e) => e.drawer_id === drawerId);
@@ -8992,7 +9164,6 @@ if (detailPanelRetry) {
       render();
     }
   });
-}
 
 // Click-pop for every top-row action button (Tools, Drafts, Write,
 // Trash, Theme, Settings, Notifications bell). Matches the floating
@@ -9265,15 +9436,12 @@ function syncTrashAutoDeleteSelect() {
   if (sel) sel.value = String(getTrashAutoDeleteDays());
 }
 
-const trashAutoDeleteSelect = document.querySelector("#trashAutoDeleteSelect");
-if (trashAutoDeleteSelect) {
-  trashAutoDeleteSelect.addEventListener("change", async () => {
+const trashAutoDeleteSelect = on("trashAutoDeleteSelect", "change", async () => {
     const n = parseInt(trashAutoDeleteSelect.value, 10);
     const days = TRASH_AUTODELETE_ALLOWED.has(n) ? n : 0;
     await updatePreferences({ trash_auto_delete_days: days });
     syncTrashAutoDeleteSelect();
   });
-}
 
 // ---------- New preferences: reduce motion / default sort / footer info ----------
 // All three are server-stored (machine-wide) via the same /api/preferences
@@ -9746,6 +9914,10 @@ function renderNotifications() {
     .filter(isRecentlyUpdated)
     .slice()
     .sort((a, b) => (b.updated_at || "").localeCompare(a.updated_at || ""));
+  const factUpdates = suppressUpdates ? [] : ((state.palace && Array.isArray(state.palace.fact_events)) ? state.palace.fact_events : [])
+    .filter(isRecentlyFactEvent)
+    .slice()
+    .sort((a, b) => (factEventTimestamp(b) || "").localeCompare(factEventTimestamp(a) || ""));
   // Failed-save entries are higher-priority than info notifications —
   // they represent something the user thought succeeded but didn't,
   // so they always sit at the top of the dropdown and contribute
@@ -9758,7 +9930,8 @@ function renderNotifications() {
   // unseen class) when EITHER signal is present. Failures alone keep
   // the bell active even after all info notifications are dismissed,
   // which is correct — a failure is unresolved until acknowledged.
-  const n = updates.length + failures.length;
+  const infoCount = updates.length + factUpdates.length;
+  const n = infoCount + failures.length;
   // Notification-sound trigger: play the synthesized chime when the
   // count grows from a known baseline (not on first render — initial
   // count establishes the baseline, no sound). Debounced 500ms to
@@ -9814,8 +9987,8 @@ function renderNotifications() {
   if (count) {
     count.textContent = n > 0
       ? (failures.length > 0
-        ? `${failures.length} failed · ${updates.length} new`
-        : `${updates.length} new`)
+        ? `${failures.length} failed · ${infoCount} new`
+        : `${infoCount} new`)
       : "";
   }
   if (empty) empty.classList.toggle("hidden", n > 0);
@@ -9849,7 +10022,9 @@ function renderNotifications() {
     if (Number.isNaN(filed) || Number.isNaN(updated)) return false;
     return (updated - filed) > 10_000;
   }
-  // Failures rendered first (top of panel), then info updates.
+  // Failures rendered first (top of panel), then info updates. Drawer
+  // updates and fact lifecycle events are each newest-first within their
+  // group.
   // Failure layout differs from update layout: the error message can
   // be long (full sentence with context) and needs its own full-width
   // line to wrap cleanly. So we put title + timestamp on a header row
@@ -9915,7 +10090,31 @@ function renderNotifications() {
       </span>
     </button>`;
   }).join("");
-  list.innerHTML = failureHtml + updateHtml;
+  const factHtml = factUpdates.map((event) => {
+    const eventId = factEventSeenKey(event);
+    const title = escapeHtml(factEventTitle(event) || event.fact_id || "Fact");
+    const when = escapeHtml(formatRelativeTime(factEventTimestamp(event)) || "");
+    const label = escapeHtml(factEventMetaLabel(event));
+    const sourceDrawerId = event.source_drawer_id || "";
+    return `<button class="notif-item" type="button"
+      data-notif-fact-id="${escapeHtml(eventId)}"
+      data-notif-source-drawer-id="${escapeHtml(sourceDrawerId)}"
+      data-notif-fact-query="${title}">
+      <span class="notif-avatar notif-avatar-edit" aria-hidden="true">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="6" cy="12" r="2.4" fill="currentColor"/>
+          <circle cx="18" cy="6" r="2.4" fill="currentColor"/>
+          <circle cx="18" cy="18" r="2.4" fill="currentColor"/>
+          <path d="M8.2 11.1 15.8 7M8.2 12.9l7.6 4.1" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+        </svg>
+      </span>
+      <span class="notif-body">
+        <span class="notif-title">${title}</span>
+        <span class="notif-meta"><span class="notif-author">${label}</span> · <span class="notif-when">${when}</span></span>
+      </span>
+    </button>`;
+  }).join("");
+  list.innerHTML = failureHtml + updateHtml + factHtml;
 }
 
 function applyReduceMotion() {
@@ -10037,25 +10236,17 @@ function localizeEditShortcutLabels() {
 }
 
 // Wire each new control.
-const showFooterInfoToggle = document.querySelector("#showFooterInfoToggle");
-if (showFooterInfoToggle) {
-  showFooterInfoToggle.addEventListener("change", async () => {
+const showFooterInfoToggle = on("showFooterInfoToggle", "change", async () => {
     await updatePreferences({ show_footer_info: showFooterInfoToggle.checked });
     applyFooterInfoVisibility();
   });
-}
 
-const reduceMotionToggle = document.querySelector("#reduceMotionToggle");
-if (reduceMotionToggle) {
-  reduceMotionToggle.addEventListener("change", async () => {
+const reduceMotionToggle = on("reduceMotionToggle", "change", async () => {
     await updatePreferences({ reduce_motion: reduceMotionToggle.checked });
     applyReduceMotion();
   });
-}
 
-const adaptiveBrowseToggle = document.querySelector("#adaptiveBrowseToggle");
-if (adaptiveBrowseToggle) {
-  adaptiveBrowseToggle.addEventListener("change", async () => {
+const adaptiveBrowseToggle = on("adaptiveBrowseToggle", "change", async () => {
     await updatePreferences({ adaptive_browse: adaptiveBrowseToggle.checked });
     // Re-sync immediately so the maximize button hides/shows and the
     // grid column count flips without waiting for a filter change.
@@ -10065,11 +10256,8 @@ if (adaptiveBrowseToggle) {
     syncAdaptiveBrowse();
     renderDrawerWindow();
   });
-}
 
-const polishTextToggle = document.querySelector("#polishTextToggle");
-if (polishTextToggle) {
-  polishTextToggle.addEventListener("change", async () => {
+const polishTextToggle = on("polishTextToggle", "change", async () => {
     await updatePreferences({ polish_text: polishTextToggle.checked });
     // Polish state affects every site that runs cleanTitle /
     // humanizeName / prettifyActorName: drawer card titles, the
@@ -10079,14 +10267,11 @@ if (polishTextToggle) {
     // and the rooms-panel structural signature so the next render()
     // rebuilds both layouts with the new polish setting in effect.
     // Then a full render() repaints every other surface.
-    state._virtCardsHtml = null;
     state._lastDrawerFilterSig = null;
-    state._lastStartIdx = -1;
-    state._lastEndIdx = -1;
+    invalidateCardCache();
     if (els.roomNav) els.roomNav.dataset.structuralSig = "";
     render();
   });
-}
 
 // Settings → "Send test notification". Pushes a fake failed-save
 // entry onto state.failedSaves, shows the browser notification preview
@@ -10099,9 +10284,7 @@ if (polishTextToggle) {
 // The fake drawer_id is prefixed `__test_failure_` so it never collides
 // with a real drawer's id, and the timestamp suffix lets the user fire
 // the test repeatedly (pushFailedSave dedupes by drawer_id).
-const sendTestNotifBtn = document.querySelector("#sendTestNotifBtn");
-if (sendTestNotifBtn) {
-  sendTestNotifBtn.addEventListener("click", async () => {
+const sendTestNotifBtn = on("sendTestNotifBtn", "click", async () => {
     pushFailedSave({
       drawer_id: `__test_failure_${Date.now()}`,
       title: "Test notification",
@@ -10118,7 +10301,6 @@ if (sendTestNotifBtn) {
     // chime if renderNotifications also sees the count increase.
     renderNotifications();
   });
-}
 
 // Settings → "Mark all memories as seen". Unconditional companion to
 // the inline button — works regardless of filter, regardless of count.
@@ -10126,9 +10308,7 @@ if (sendTestNotifBtn) {
 // user can clear the WHOLE marker map from one place. The inline
 // button still exists for the common case (a bunch of visible cards
 // got bumped); this is the "I just want it ALL gone" hammer.
-const markAllSeenSettingsBtn = document.querySelector("#markAllSeenSettingsBtn");
-if (markAllSeenSettingsBtn) {
-  markAllSeenSettingsBtn.addEventListener("click", () => {
+const markAllSeenSettingsBtn = on("markAllSeenSettingsBtn", "click", () => {
     if (!state.palace || !Array.isArray(state.palace.drawers)) return;
     // Stamp every drawer — even ones that aren't currently "recently
     // updated" — so the local seen map stays consistent for a future
@@ -10138,33 +10318,23 @@ if (markAllSeenSettingsBtn) {
     markDrawersSeen(ids);
     // Invalidate card cache + re-render so any visible blue markers
     // clear immediately without waiting for a filter change.
-    state._virtCardsHtml = null;
-    state._lastStartIdx = -1;
-    state._lastEndIdx = -1;
+    invalidateCardCache();
     render();
   });
-}
 
-const relativeTimeToggle = document.querySelector("#relativeTimeToggle");
-if (relativeTimeToggle) {
-  relativeTimeToggle.addEventListener("change", async () => {
+const relativeTimeToggle = on("relativeTimeToggle", "change", async () => {
     await updatePreferences({ relative_time: relativeTimeToggle.checked });
     // Same invalidation surface as polish_text: card kickers bake
     // the formatted date into the cached HTML, and the meta-strip
     // UPDATED cell is part of the detail render. Wipe the drawer-
     // card cache and re-render. (Rooms panel doesn't use either
     // date formatter, so its structuralSig stays valid.)
-    state._virtCardsHtml = null;
     state._lastDrawerFilterSig = null;
-    state._lastStartIdx = -1;
-    state._lastEndIdx = -1;
+    invalidateCardCache();
     render();
   });
-}
 
-const panelControlsAlwaysToggle = document.querySelector("#panelControlsAlwaysToggle");
-if (panelControlsAlwaysToggle) {
-  panelControlsAlwaysToggle.addEventListener("change", async () => {
+const panelControlsAlwaysToggle = on("panelControlsAlwaysToggle", "change", async () => {
     await updatePreferences({ panel_controls_always_visible: panelControlsAlwaysToggle.checked });
     // Pure CSS effect — flip the body class and let the existing
     // 0.2s opacity transition on .detail-panel-actions handle the
@@ -10172,22 +10342,16 @@ if (panelControlsAlwaysToggle) {
     // DOM that doesn't depend on app state for layout).
     applyPanelControlsAlwaysVisible();
   });
-}
 
-const suppressUpdatesToggle = document.querySelector("#suppressUpdatesToggle");
-if (suppressUpdatesToggle) {
-  suppressUpdatesToggle.addEventListener("change", async () => {
+const suppressUpdatesToggle = on("suppressUpdatesToggle", "change", async () => {
     await updatePreferences({ suppress_update_notifications: suppressUpdatesToggle.checked });
     // Re-render notifications so the bell badge + dropdown reflect
     // the new filter immediately. Drawer cards' own update markers
     // are unaffected — this only gates the bell.
     renderNotifications();
   });
-}
 
-const notificationSoundsToggle = document.querySelector("#notificationSoundsToggle");
-if (notificationSoundsToggle) {
-  notificationSoundsToggle.addEventListener("change", async () => {
+const notificationSoundsToggle = on("notificationSoundsToggle", "change", async () => {
     const enabled = notificationSoundsToggle.checked;
     // Audible preview when the user FLIPS ON sounds — plays the
     // success chime then, ~400ms later, the descending error chime
@@ -10200,11 +10364,8 @@ if (notificationSoundsToggle) {
     }
     await updatePreferences({ notification_sounds: enabled });
   });
-}
 
-const notificationPollIntervalSelect = document.querySelector("#notificationPollIntervalSelect");
-if (notificationPollIntervalSelect) {
-  notificationPollIntervalSelect.addEventListener("change", async () => {
+const notificationPollIntervalSelect = on("notificationPollIntervalSelect", "change", async () => {
     const n = parseInt(notificationPollIntervalSelect.value, 10);
     const seconds = NOTIFICATION_POLL_ALLOWED.has(n) ? n : 30;
     await updatePreferences({ notification_poll_interval: seconds });
@@ -10214,18 +10375,14 @@ if (notificationPollIntervalSelect) {
     // freshly-cached preference value via getNotificationPollIntervalSeconds.
     startNotificationPolling();
   });
-}
 
-const defaultSortSelect = document.querySelector("#defaultSortSelect");
-if (defaultSortSelect) {
-  defaultSortSelect.addEventListener("change", async () => {
+const defaultSortSelect = on("defaultSortSelect", "change", async () => {
     const v = SORT_ALLOWED.has(defaultSortSelect.value) ? defaultSortSelect.value : "filed-desc";
     await updatePreferences({ default_sort: v });
     // Don't auto-apply to the current view — the user might be
     // mid-browse with a different sort. The new default kicks in
     // on the next page load / hashchange that has no explicit sort.
   });
-}
 
 // ---------- Settings: keyboard-shortcut remapping ----------
 // Each Settings shortcut button enters a "listening" state on click,
@@ -10340,9 +10497,9 @@ applyHash();
 // page for an hour and miss every cross-session notification.
 //
 // Cadence is user-configurable via Settings → Notifications →
-// Refresh interval (15 / 30 / 60s, default 30). Each poll is just one
-// /api/palace fetch (small JSON, no heavy work) — measured at ~30ms
-// on the Pi for ~80 drawers.
+// Refresh interval (15 / 30 / 60s, default 30). Each poll first checks
+// a tiny /api/palace-version token and only fetches /api/palace when
+// the server says one of the palace inputs changed.
 //
 // Gating: skipped while the tab is hidden (Page Visibility API saves
 // CPU when the user can't see the result anyway), and skipped while
@@ -10352,16 +10509,26 @@ applyHash();
 // fires so the notification state catches up the moment the user
 // looks at it instead of waiting up to N seconds for the next tick.
 let _notifPollTimer = null;
+let _palacePollInFlight = false;
 
 async function pollPalaceQuiet() {
   if (document.hidden) return;
   if (state.isEditing) return;
+  if (_palacePollInFlight) return;
+  _palacePollInFlight = true;
   try {
+    const version = await fetchPalaceVersion();
+    if (version && state._palaceVersion && version === state._palaceVersion) {
+      await loadTunnels();
+      return;
+    }
     await loadPalace();
   } catch {
     // Network blip / auth expired / etc. — next tick will retry.
     // No UI feedback on poll failures (would be noisier than useful
     // for a background sync).
+  } finally {
+    _palacePollInFlight = false;
   }
 }
 

@@ -94,7 +94,7 @@
     />
     <meta name="twitter:image" content="/apricity-logo.png" />
 
-    <link rel="stylesheet" href="/styles.css?v=362" />
+    <link rel="stylesheet" href="/styles.css?v=366" />
   </head>
   <body>
     <div class="shell">
@@ -433,18 +433,34 @@
 
         <section class="panel facts-panel">
           <div class="panel-header">
-            <div>
+            <div class="kg-heading">
+              <span class="kg-heading-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24">
+                  <circle cx="6" cy="12" r="2.6" fill="currentColor"/>
+                  <circle cx="18" cy="6" r="2.6" fill="currentColor"/>
+                  <circle cx="18" cy="18" r="2.6" fill="currentColor"/>
+                  <path d="M8.3 11.1 15.7 7M8.3 12.9l7.4 4.1" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+                </svg>
+              </span>
+              <div>
               <h2>Knowledge Graph</h2>
               <p id="factCount"></p>
+              </div>
             </div>
             <div class="panel-tools">
               <div class="view-toggle" id="factsViewToggle" role="tablist" aria-label="Knowledge graph view">
                 <button class="view-toggle-btn active" id="factsViewList" type="button" role="tab" aria-selected="true">List</button>
                 <button class="view-toggle-btn" id="factsViewGraph" type="button" role="tab" aria-selected="false">Graph</button>
               </div>
-              <button class="icon-button toolbar-button" id="addFactBtn" type="button">+ Add fact</button>
+              <button class="icon-button toolbar-button add-fact-button" id="addFactBtn" type="button">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
+                </svg>
+                <span>Add fact</span>
+              </button>
             </div>
           </div>
+          <div class="fact-stats" id="factStats" aria-label="Knowledge graph summary"></div>
           <div class="facts" id="facts"></div>
           <div class="facts-graph hidden" id="factsGraph"></div>
         </section>
@@ -1513,7 +1529,7 @@
          app.js. Order is preserved (app.js before lab.js) and all
          event handlers attach inside the scripts, so deferring is
          safe. Shaves the JS-execution stall off the first paint. -->
-    <script src="/app.js?v=284" defer></script>
+    <script src="/app.js?v=295" defer></script>
     <script src="/lab.js?v=4" defer></script>
   </body>
 </html>

@@ -5514,62 +5514,249 @@ html.reduce-motion .content-grid.detail-enlarged .detail-edit-grid .detail-edito
    only so viewing-mode bodies stay quiet. */
 
 .facts-panel {
-  margin-top: 16px;
+  margin-top: 18px;
+  overflow: hidden;
 }
 
+/* The header is deliberately NOT given a fill — it now matches the
+   plain .panel-header of the rooms / memories panels above. The old
+   var(--meta-band) tint made the whole section read as a separate,
+   heavier zone instead of a sibling panel. */
+.kg-heading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.kg-heading-icon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 11px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  flex: 0 0 34px;
+}
+
+.kg-heading-icon svg {
+  width: 19px;
+  height: 19px;
+}
+
+.add-fact-button svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* Quiet summary cluster, not a metrics band. Number-first with the
+   label beneath; tabular figures so the four counts don't reflow as
+   filters re-render them. A single hairline is the only chrome. */
+.fact-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+}
+
+.fact-stat {
+  min-width: 0;
+}
+
+.fact-stat strong {
+  display: block;
+  color: var(--text);
+  font-size: 19px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+
+.fact-stat span {
+  display: block;
+  margin-top: 3px;
+  color: var(--soft);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* The list is ONE grouped surface (iOS-Settings style) rather than a
+   stack of heavy bordered cards. The white fill + soft layered shadow
+   + 16px radius are borrowed verbatim from .drawer-card so the KG list
+   reads as a sibling of the panels above. Individual relationships are
+   quiet hairline-separated rows inside it (see .fact below). */
 .facts {
-  display: grid;
-  gap: 8px;
-  max-height: 300px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  max-height: min(48vh, 460px);
   overflow: auto;
-  padding: 12px;
-}
-
-.fact {
-  display: grid;
-  grid-template-columns: minmax(120px, 1fr) minmax(140px, 0.8fr) minmax(160px, 1.3fr) auto;
-  gap: 10px;
-  /* align-items:start (was center) so each cell wraps independently
-     and the row's End button stays anchored to the top of the row
-     when cells expand vertically — keeps the layout readable when
-     facts have long object strings. */
-  align-items: start;
-  border-radius: 14px;
-  padding: 12px;
-  background: rgba(255, 255, 255, 0.62);
+  margin: 14px 20px 18px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: #ffffff;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.04),
+    0 4px 12px rgba(15, 15, 30, 0.06);
+  scrollbar-width: thin;
 }
 
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .fact {
-    background: rgba(44, 44, 46, 0.64);
+  :root:not([data-theme="light"]) .facts {
+    background: var(--surface-strong);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.28);
   }
 }
 
-:root[data-theme="dark"] .fact {
-    background: rgba(44, 44, 46, 0.64);
-  }
-
-.fact strong {
-  color: var(--accent);
+:root[data-theme="dark"] .facts {
+  background: var(--surface-strong);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.28);
 }
 
-/* Allow long subject/predicate/object values to wrap onto multiple
-   lines instead of truncating with ellipsis. overflow-wrap:anywhere
-   handles strings without spaces (long identifiers, URLs) by
-   breaking at any character; word-break:break-word keeps natural
-   word boundaries where they exist. line-height bumped slightly so
-   wrapped text stays readable. */
-.fact span,
-.fact strong {
-  overflow-wrap: anywhere;
-  word-break: break-word;
+/* Row — transparent, full-row rounded hover tint (the whole row is the
+   target, Apple-style). No per-row border/shadow; the grouped surface
+   above owns the elevation. */
+.fact {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 12px;
+  border-radius: 11px;
+  background: transparent;
+  transition: background 0.14s ease;
+}
+
+/* Inset hairline between rows, drawn as a pseudo-element so the rounded
+   hover highlight can sit over it without a visible seam. Inset matches
+   the row's horizontal padding so the line aligns under the content,
+   like an iOS grouped-list separator. */
+.fact::before {
+  content: "";
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  top: -1px;
+  height: 1px;
+  background: var(--line);
+}
+
+.fact:first-child::before {
+  display: none;
+}
+
+.fact:hover {
+  background: var(--accent-soft);
+}
+
+/* Hide the separators bracketing the hovered row so the highlight's
+   rounded corners aren't crossed by a hairline. */
+.fact:hover::before,
+.fact:hover + .fact::before {
+  opacity: 0;
+}
+
+.fact-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  flex: 1;
+}
+
+/* The relationship as one flowing, left-aligned line. Subject + object
+   carry the weight (the entities); the predicate is quiet connective
+   tissue with a direction arrow. Wraps naturally on narrow widths
+   instead of being justified edge-to-edge across the panel. */
+.fact-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  min-width: 0;
+  font-size: 14px;
   line-height: 1.4;
 }
 
-.fact em {
+.fact-term {
+  color: var(--text);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.fact-rel {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
   color: var(--muted);
+  font-weight: 500;
+}
+
+.fact-rel-label {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.fact-rel svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  color: var(--soft);
+}
+
+.fact-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  color: var(--soft);
   font-size: 12px;
-  font-style: normal;
+}
+
+.fact-meta-item {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.fact-meta-item::before {
+  content: "";
+  width: 3px;
+  height: 3px;
+  margin: 0 8px 0 0;
+  border-radius: 50%;
+  background: var(--soft);
+  flex: 0 0 3px;
+}
+
+/* Status is the one place where colour encodes data, so it keeps a
+   small tinted chip; everything else in the meta line is muted text. */
+.fact-status {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.fact-status.is-active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.fact-status.is-ended {
+  background: var(--code-bg);
+  color: var(--muted);
 }
 
 .empty-list,
@@ -6128,10 +6315,6 @@ html.reduce-motion .content-grid.detail-enlarged .detail-edit-grid .detail-edito
     top: 0;
     height: 1px;
     background: var(--line);
-  }
-
-  .fact {
-    grid-template-columns: 1fr;
   }
 }
 
@@ -6727,11 +6910,12 @@ a.wiki-link:hover {
 .view-toggle {
   display: inline-flex;
   align-items: center;
-  padding: 3px;
+  height: 44px;
+  padding: 4px;
   gap: 2px;
   border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--surface);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface) 78%, transparent);
 }
 
 .view-toggle-btn {
@@ -6743,9 +6927,13 @@ a.wiki-link:hover {
   font-size: 12px;
   font-weight: 600;
   padding: 6px 12px;
-  border-radius: 7px;
+  border-radius: 999px;
   cursor: pointer;
-  transition: background 160ms ease, color 160ms ease;
+  transition:
+    background 160ms ease,
+    color 160ms ease,
+    box-shadow 160ms ease,
+    transform 180ms cubic-bezier(0.34, 1.3, 0.64, 1);
 }
 
 .view-toggle-btn:hover {
@@ -6756,40 +6944,43 @@ a.wiki-link:hover {
   background: var(--surface-strong);
   color: var(--text);
   box-shadow: inset 0 0 0 1px var(--line);
+  transform: translateY(-1px);
 }
 
 /* ---------- knowledge graph viz ---------- */
 .facts-graph {
   padding: 14px;
+  min-height: 360px;
 }
 
 .kg-graph-wrap {
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
 }
 
 .kg-stage {
   position: relative;
-  border-radius: 18px;
+  border-radius: 16px;
   overflow: hidden;
-  background:
-    radial-gradient(120% 80% at 30% 20%, rgba(63, 148, 186, 0.10), transparent 65%),
-    radial-gradient(100% 80% at 70% 90%, rgba(63, 148, 186, 0.06), transparent 70%),
-    var(--surface);
+  background: var(--surface-strong);
+  background-image:
+    linear-gradient(var(--line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--line) 1px, transparent 1px);
+  background-size: 36px 36px;
   border: 1px solid var(--line);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.04),
-    0 12px 30px rgba(0, 0, 0, 0.18);
+    0 10px 24px rgba(0, 0, 0, 0.12);
 }
 
 .kg-svg {
   display: block;
   width: 100%;
-  height: 64vh;
-  min-height: 480px;
-  max-height: 760px;
+  height: min(58vh, 660px);
+  min-height: 380px;
+  max-height: 660px;
   cursor: grab;
   touch-action: none;
 }
@@ -6977,26 +7168,25 @@ a.wiki-link:hover {
   opacity: 0;
 }
 
-/* ----- chrome ----- */
-.kg-hint {
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--soft);
-  letter-spacing: 0.02em;
-  padding: 0 4px;
-}
-
 .kg-legend {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
+  min-height: 38px;
+  padding: 0 2px;
   font-size: 12px;
+  font-weight: 700;
   color: var(--muted);
-  padding: 0 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
 }
 
 .kg-reset {
   appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   border: 1px solid var(--line);
   background: var(--surface);
   color: var(--text);
@@ -7004,15 +7194,27 @@ a.wiki-link:hover {
   font: inherit;
   font-size: 12px;
   font-weight: 600;
-  padding: 6px 12px;
+  padding: 7px 12px;
   border-radius: 999px;
-  transition: background 160ms ease, border-color 160ms ease, color 160ms ease;
+  text-transform: none;
+  letter-spacing: 0;
+  transition:
+    background 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease,
+    transform 180ms cubic-bezier(0.34, 1.3, 0.64, 1);
+}
+
+.kg-reset svg {
+  width: 15px;
+  height: 15px;
 }
 
 .kg-reset:hover {
   background: var(--surface-strong);
   border-color: rgba(63, 148, 186, 0.4);
   color: var(--accent);
+  transform: translateY(-1px);
 }
 
 .settings-section-head {
@@ -7148,28 +7350,117 @@ input.invalid-mismatch {
   min-height: 44px;
 }
 
-.fact {
-  grid-template-columns: minmax(120px, 1fr) minmax(140px, 0.8fr) minmax(160px, 1.3fr) auto auto;
-}
-
 .fact.expired {
-  opacity: 0.55;
+  opacity: 0.6;
 }
 
-.fact.expired strong {
-  text-decoration: line-through;
-}
-
+/* Actions recede until the row is hovered or focused — the same
+   hover-reveal the room rows use for their menu, which the user
+   already likes. They still occupy their slot (opacity, not display)
+   so the row layout never shifts. Always shown on coarse pointers
+   where there is no hover. */
 .fact-actions {
   display: flex;
   align-items: center;
-  gap: 6px;
+  justify-content: flex-end;
+  gap: 2px;
+  flex: 0 0 auto;
+  opacity: 0;
+  transition: opacity 0.14s ease;
 }
 
-.fact-actions .icon-button {
-  min-height: 28px;
-  padding: 0 10px;
+.fact:hover .fact-actions,
+.fact:focus-within .fact-actions {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .fact-actions {
+    opacity: 1;
+  }
+}
+
+/* Ghost buttons — no border or fill of their own (unlike the old
+   .icon-button chrome). Muted glyph + label that tint on direct
+   hover; End goes danger. */
+.fact-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 32px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--muted);
   font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background 0.14s ease,
+    color 0.14s ease;
+}
+
+.fact-action:hover,
+.fact-action:focus-visible {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.fact-action svg {
+  width: 15px;
+  height: 15px;
+}
+
+.fact-action-end:hover,
+.fact-action-end:focus-visible {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+@media (max-width: 900px) {
+  .fact-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    row-gap: 14px;
+  }
+
+  .kg-svg {
+    min-height: 320px;
+    height: 48vh;
+  }
+}
+
+@media (max-width: 560px) {
+  .kg-heading-icon {
+    display: none;
+  }
+
+  .fact-stats {
+    grid-template-columns: 1fr;
+    row-gap: 12px;
+  }
+
+  .facts {
+    margin: 12px 12px 14px;
+  }
+
+  .facts-graph {
+    padding: 10px;
+  }
+
+  /* Stack the actions below the relationship on phones (no hover to
+     reveal them, and the row is too narrow to hold them inline). */
+  .fact {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .fact-actions {
+    opacity: 1;
+    justify-content: flex-start;
+  }
 }
 
 .draft-item {
