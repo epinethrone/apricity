@@ -294,6 +294,7 @@ const els = {
   sortSelect: document.querySelector("#sortSelect"),
   draftsBtn: document.querySelector("#draftsBtn"),
   draftsBadge: document.querySelector("#draftsBadge"),
+  mobileLabAction: document.querySelector("#mobileLabAction"),
   trashBtn: document.querySelector("#trashBtn"),
   addFactBtn: document.querySelector("#addFactBtn"),
   writeOpen: document.querySelector("#writeOpen"),
@@ -1006,7 +1007,17 @@ function markdownLite(value) {
     if (quoteMatch) {
       flushList();
       flushPipe();
-      quoteBuffer.push(quoteMatch[1]);
+      // A `[!TYPE]` admonition head starts a NEW callout. Without this,
+      // two adjacent admonitions (no blank line between them — required
+      // by the tight-source convention) collapse into one blockquote
+      // and the second `[!TYPE]` renders as literal body text. Flushing
+      // the current run when a head appears mid-run gives each its box.
+      const content = quoteMatch[1];
+      if (quoteBuffer.length
+          && /^\[!(?:NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*$/i.test(content)) {
+        flushQuote();
+      }
+      quoteBuffer.push(content);
       continue;
     }
     flushQuote();
@@ -2867,6 +2878,50 @@ function isRecentlyFactEvent(event) {
   return true;
 }
 
+// ---- Bell-notification "dismissed" namespace ------------------------
+// The bell is STICKIER than the card "Updated" dot. A new memory stays
+// in the bell until the user dismisses it FROM the bell — opening the
+// memory (which writes the plain seen-key and clears the card dot) no
+// longer clears it. To decouple the two WITHOUT a second server store,
+// bell dismissals are recorded in the SAME seen-map under a "bell:"
+// prefix: viewing writes <id>, bell actions write bell:<id>. The
+// server's /api/seen already accepts arbitrary item ids, so the backend
+// is unchanged. isRecentlyUpdated (card dot) keeps reading the plain key.
+const BELL_SEEN_PREFIX = "bell:";
+function bellDismissedAt(id) {
+  return id ? readSeenAtMap()[BELL_SEEN_PREFIX + id] : "";
+}
+function isBellUnseenDrawer(drawer) {
+  if (!drawer || !drawer.updated_at) return false;
+  const updated = Date.parse(drawer.updated_at);
+  if (Number.isNaN(updated) || (Date.now() - updated) >= RECENT_UPDATE_MS) return false;
+  const seenIso = bellDismissedAt(drawer.drawer_id);
+  if (seenIso) {
+    const seenAt = Date.parse(seenIso);
+    if (!Number.isNaN(seenAt) && seenAt >= updated) return false;
+  }
+  return true;
+}
+function isBellUnseenFactEvent(event) {
+  const key = factEventSeenKey(event);
+  const atIso = factEventTimestamp(event);
+  if (!key || !atIso) return false;
+  const at = Date.parse(atIso);
+  if (Number.isNaN(at) || (Date.now() - at) >= RECENT_UPDATE_MS) return false;
+  const seenIso = bellDismissedAt(key);
+  if (seenIso) {
+    const seenAt = Date.parse(seenIso);
+    if (!Number.isNaN(seenAt) && seenAt >= at) return false;
+  }
+  return true;
+}
+// Record bell items as dismissed (writes the "bell:"-prefixed keys via
+// the shared seen-map plumbing, so it persists + syncs to the server).
+function markBellItemsSeen(ids) {
+  const keys = (ids || []).filter(Boolean).map((id) => BELL_SEEN_PREFIX + id);
+  if (keys.length) markNotificationItemsSeen(keys);
+}
+
 function factEventTitle(event) {
   const parts = [event.subject, event.predicate, event.object]
     .map(prettifyFactValue)
@@ -3534,7 +3589,18 @@ function renderDrawerDetail(drawer, opts = {}) {
   // its "← Back to tunnel" bar needs the rebuild).
   const backBarUnchanged =
     Boolean(backToTunnel) === Boolean(els.detail.querySelector(".detail-back-bar"));
-  if (sameDrawerInDom && !isEditingThisEarly && !state.isEditing && backBarUnchanged) {
+  // If the body still holds the inline editor (a contenteditable
+  // surface), we're transitioning OUT of edit mode — cancel or commit.
+  // The dirty editor DOM MUST be rebuilt into the clean read-only view
+  // even though the saved drawer fields look unchanged: on cancel the
+  // edits were never committed (they live only in the contenteditable +
+  // the now-nulled editBuffer), so sameDrawerInDom is true and the
+  // fast-path would early-return, leaving the unsaved typing (e.g. a
+  // stray empty line from Enter) visible in "view" mode. The editor body
+  // is the only node with contenteditable="true" (callout label/remove
+  // buttons are "false"), so its presence is a clean exit-edit signal.
+  const editorInDom = !!els.detail.querySelector('[contenteditable="true"]');
+  if (sameDrawerInDom && !isEditingThisEarly && !state.isEditing && backBarUnchanged && !editorInDom) {
     // Keep state + tunnel chip in sync, then leave the DOM untouched.
     state.previousDrawerData = drawer;
     state.previousTunnelData = null;
@@ -5186,6 +5252,7 @@ els.sortSelect.addEventListener("change", () => {
     const factEventId = item.dataset.notifFactId;
     if (factEventId) {
       markFactEventSeen(factEventId);
+      markBellItemsSeen([factEventId]);
       const sourceDrawer = item.dataset.notifSourceDrawerId
         ? drawerById(item.dataset.notifSourceDrawerId)
         : null;
@@ -5211,6 +5278,10 @@ els.sortSelect.addEventListener("change", () => {
     const drawer = drawerById(drawerId);
     if (!drawer) return;
     const isFailure = item.classList.contains("notif-item-failure");
+    // Clicking a (non-failure) drawer notification acknowledges it in
+    // the bell. Failures stay sticky until retried/cleared (see below),
+    // so they are NOT bell-dismissed on click.
+    if (!isFailure) markBellItemsSeen([drawerId]);
     // For failure entries we DO NOT auto-clear on click. The failure
     // stays in state.failedSaves so the retry button on the detail
     // panel + the red .is-failed tint on the card remain visible
@@ -5265,14 +5336,14 @@ els.sortSelect.addEventListener("change", () => {
 const notificationsMarkAll = on("notificationsMarkAll", "click", () => {
     if (!state.palace || !Array.isArray(state.palace.drawers)) return;
     const drawerIds = state.palace.drawers
-      .filter(isRecentlyUpdated)
+      .filter(isBellUnseenDrawer)
       .map((d) => d.drawer_id);
     const factIds = ((state.palace && Array.isArray(state.palace.fact_events)) ? state.palace.fact_events : [])
-      .filter(isRecentlyFactEvent)
+      .filter(isBellUnseenFactEvent)
       .map(factEventSeenKey)
       .filter(Boolean);
     const ids = drawerIds.concat(factIds);
-    if (ids.length) markNotificationItemsSeen(ids);
+    if (ids.length) markBellItemsSeen(ids);
     // Clear failure entries too — same bulk-acknowledge intent.
     state.failedSaves = [];
     // Cache-invalidation dance so the next render rebuilds card
@@ -5502,6 +5573,30 @@ function setWriteSheetMode(mode, draft = null) {
   }
 }
 
+function isMobileSheetViewport() {
+  return window.matchMedia
+    && (window.matchMedia("(max-width: 768px)").matches
+      || window.matchMedia("(pointer: coarse)").matches);
+}
+
+function focusSheetField(el) {
+  if (!el || isMobileSheetViewport()) return;
+  el.focus();
+}
+
+function resetSheetScroll(sheet) {
+  if (!sheet) return;
+  requestAnimationFrame(() => {
+    const scrollables = sheet.querySelectorAll(
+      ".write-panel, .edit-panel, .settings-shell, .settings-content-pane, .settings-nav-list, .lab-output"
+    );
+    scrollables.forEach((el) => {
+      el.scrollTop = 0;
+      el.scrollLeft = 0;
+    });
+  });
+}
+
 function openWriteSheet() {
   setWriteSheetMode("create");
   renderWritePickers(
@@ -5509,8 +5604,9 @@ function openWriteSheet() {
     state.selectedRoom === "all" ? "" : state.selectedRoom,
   );
   els.writeSheet.classList.remove("hidden");
+  resetSheetScroll(els.writeSheet);
   setWriteStatus("");
-  els.writeTitle.focus();
+  focusSheetField(els.writeTitle);
 }
 
 function openWriteSheetForDraft(draft) {
@@ -5519,8 +5615,9 @@ function openWriteSheetForDraft(draft) {
   els.writeTitle.value = draft.title || "";
   els.writeContent.value = draft.content || "";
   els.writeSheet.classList.remove("hidden");
+  resetSheetScroll(els.writeSheet);
   setWriteStatus("");
-  els.writeTitle.focus();
+  focusSheetField(els.writeTitle);
 }
 
 function closeWriteSheet() {
@@ -5709,7 +5806,8 @@ function openDeleteSheet(request) {
   setDeleteStatus("");
   els.deleteConfirm.disabled = false;
   els.deleteSheet.classList.remove("hidden");
-  els.deleteConfirm.focus();
+  resetSheetScroll(els.deleteSheet);
+  focusSheetField(els.deleteConfirm);
 }
 
 function closeDeleteSheet() {
@@ -6449,6 +6547,21 @@ function wireInlineEditorInputs() {
           return;
         }
       }
+      // Plain Enter inside a callout escapes the box — a new paragraph
+      // appears beneath it and the caret moves there. Without this the
+      // caret is trapped inside the blockquote with no keyboard way
+      // out. Shift+Enter is intentionally NOT caught, so it keeps the
+      // browser default (a line break WITHIN the box) — the LLM-chat
+      // convention (Enter leaves, Shift+Enter newlines).
+      if (event.key === "Enter" && !event.shiftKey
+          && !event.metaKey && !event.ctrlKey && !event.altKey
+          && !event.isComposing) {
+        if (tryEnterExitCallout(body)) {
+          event.preventDefault();
+          syncEditBufferFromBody();
+          return;
+        }
+      }
       if (!(event.metaKey || event.ctrlKey)) return;
       const key = event.key.toLowerCase();
       if (key === "b" && !event.shiftKey) {
@@ -7022,6 +7135,40 @@ function tryBackspaceEmptyCallout(body) {
   return true;
 }
 
+/** Plain Enter inside a callout/admonition EXITS the box: drop a new
+ * empty paragraph directly beneath the blockquote and move the caret
+ * there. The browser default keeps inserting lines *inside* the
+ * blockquote, which traps the caret with no keyboard way out (you can
+ * only escape by clicking below the box with the mouse). Shift+Enter is
+ * deliberately NOT routed here by the caller, so it keeps the browser
+ * default — a line break WITHIN the box — matching the LLM-chat
+ * convention (Enter leaves, Shift+Enter newlines). htmlToMarkdown turns
+ * that <br> back into a continued `> ` line, so it round-trips.
+ * Returns true if it acted; the caller then preventDefaults + syncs. */
+function tryEnterExitCallout(body) {
+  const sel = window.getSelection();
+  if (!sel || !sel.rangeCount) return false;
+  const node = sel.getRangeAt(0).startContainer;
+  const startEl = node.nodeType === Node.ELEMENT_NODE ? node : node.parentNode;
+  if (!startEl || !startEl.closest) return false;
+  const callout = startEl.closest("blockquote.callout");
+  if (!callout || !body.contains(callout)) return false;
+  // New empty paragraph after the box. The <br> is the standard way to
+  // give an empty contenteditable paragraph height + a landable caret.
+  const p = document.createElement("p");
+  p.appendChild(document.createElement("br"));
+  callout.after(p);
+  const range = document.createRange();
+  range.setStart(p, 0);
+  range.collapse(true);
+  sel.removeAllRanges();
+  sel.addRange(range);
+  // contenteditable won't always scroll to a programmatically-placed
+  // caret; nudge the new line into view.
+  if (p.scrollIntoView) p.scrollIntoView({ block: "nearest" });
+  return true;
+}
+
 /** Build a "remove this callout" X button. Marked contenteditable=
  * false so the caret can't land in it (would otherwise break typing
  * flow); class is in HTML_TO_MD_SKIP_CLASSES so it's stripped at
@@ -7503,6 +7650,7 @@ async function saveEdit(event) {
 // ---------- drafts ----------
 async function openDraftsSheet() {
   els.draftsSheet.classList.remove("hidden");
+  resetSheetScroll(els.draftsSheet);
   setDraftsStatus("");
   els.draftsList.innerHTML = `<div class="empty-list">Loading…</div>`;
   try {
@@ -7559,8 +7707,7 @@ async function openDraftsSheet() {
         btn.disabled = true;
         try {
           const detail = await fetchJson(`/api/drafts?id=${encodeURIComponent(btn.dataset.editDraft)}`);
-          closeDraftsSheet();
-          openWriteSheetForDraft(detail.draft);
+          dismissSheet(els.draftsSheet, () => openWriteSheetForDraft(detail.draft));
         } catch (error) {
           setDraftsStatus(error.message, "error");
           btn.disabled = false;
@@ -7655,6 +7802,7 @@ const TRASH_GLYPH_SVG = `<svg viewBox="0 0 24 24" aria-hidden="true">
 
 async function openTrashSheet() {
   els.trashSheet.classList.remove("hidden");
+  resetSheetScroll(els.trashSheet);
   setTrashStatus("");
   els.trashList.innerHTML = `<div class="empty-list">Loading…</div>`;
   els.trashClearAll.classList.add("hidden");
@@ -7891,7 +8039,8 @@ function openFactSheet() {
   setFactStatus("");
   els.saveFact.disabled = false;
   els.factSheet.classList.remove("hidden");
-  els.factSubject.focus();
+  resetSheetScroll(els.factSheet);
+  focusSheetField(els.factSubject);
 }
 
 function closeFactSheet() {
@@ -7958,6 +8107,7 @@ async function openSettingsSheet() {
   // toggle, which previously made the panel "pop" as if first opening).
   els.settingsSheet.classList.remove("is-opened");
   els.settingsSheet.classList.remove("hidden");
+  resetSheetScroll(els.settingsSheet);
   const settle = () => els.settingsSheet.classList.add("is-opened");
   // Listen on .settings-shell-wrap because that's the actual animation
   // root since 2026-05-28 — the entry/exit pop animations were moved
@@ -8005,7 +8155,7 @@ async function openSettingsSheet() {
   } catch (error) {
     setSettingsStatus(error.message, "error");
   }
-  els.settingsUsername.focus();
+  focusSheetField(els.settingsUsername);
 }
 
 function closeSettingsSheet() {
@@ -8336,6 +8486,15 @@ document.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
     toggleMenu(menuButton.dataset.menu);
+    return;
+  }
+  const mobileProxy = event.target.closest("[data-mobile-proxy]");
+  if (mobileProxy) {
+    event.preventDefault();
+    event.stopPropagation();
+    const target = document.getElementById(mobileProxy.dataset.mobileProxy || "");
+    closeMenus();
+    if (target) target.click();
     return;
   }
   const deleteButton = event.target.closest("[data-delete-scope]");
@@ -9317,8 +9476,11 @@ function setShowTools(value) {
   applyShowTools();
 }
 function applyShowTools() {
+  const show = getShowTools();
   const labBtn = document.querySelector("#labBtn");
-  if (labBtn) labBtn.hidden = !getShowTools();
+  const mobileLabAction = document.querySelector("#mobileLabAction");
+  if (labBtn) labBtn.hidden = !show;
+  if (mobileLabAction) mobileLabAction.hidden = !show;
 }
 applyShowTools();
 
@@ -9911,11 +10073,11 @@ function renderNotifications() {
   // is a separate signal and isn't affected by this preference.
   const suppressUpdates = getSuppressUpdateNotifications();
   const updates = suppressUpdates ? [] : drawers
-    .filter(isRecentlyUpdated)
+    .filter(isBellUnseenDrawer)
     .slice()
     .sort((a, b) => (b.updated_at || "").localeCompare(a.updated_at || ""));
   const factUpdates = suppressUpdates ? [] : ((state.palace && Array.isArray(state.palace.fact_events)) ? state.palace.fact_events : [])
-    .filter(isRecentlyFactEvent)
+    .filter(isBellUnseenFactEvent)
     .slice()
     .sort((a, b) => (factEventTimestamp(b) || "").localeCompare(factEventTimestamp(a) || ""));
   // Failed-save entries are higher-priority than info notifications —

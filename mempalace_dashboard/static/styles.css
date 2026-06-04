@@ -6258,13 +6258,20 @@ html.reduce-motion .content-grid.detail-enlarged .detail-edit-grid .detail-edito
     padding: 20px;
   }
 
-  .topbar {
+  /* The flex container is .topbar-inner, NOT .topbar (which only carries
+     background/border/margin). Wrapping must be set on the inner element,
+     or it is inert — which is why the search never dropped to its own row
+     and the action cluster overflowed the viewport on phones. */
+  .topbar-inner {
     flex-wrap: wrap;
+    row-gap: 12px;
   }
 
-  .topbar .search {
-    flex-basis: 100%;
+  .topbar-inner .search {
+    order: 3;
+    flex: 1 1 100%;
     max-width: none;
+    min-width: 0;
   }
 
   .content-grid {
@@ -7886,9 +7893,15 @@ input.invalid-mismatch {
   padding: 8px 10px;
   border: 1px solid var(--line);
   border-radius: 10px;
-  background: var(--surface);
+  /* background-color (not the `background` shorthand) so the global <select>
+     dropdown chevron — image/position/no-repeat — is preserved. The shorthand
+     reset it, which broke the KG "Direction" control's arrow. */
+  background-color: var(--surface);
   color: var(--text);
   font: inherit;
+}
+.lab-pane select {
+  padding-right: 34px;
 }
 
 .lab-pane textarea {
@@ -9622,7 +9635,11 @@ a.settings-action-row,
     overflow-x: auto;
     overflow-y: hidden;
   }
-  .settings-nav {
+  /* The nav element is .settings-nav-list (not .settings-nav); targeting
+     the wrong class left this inert, so the nav stayed a tall vertical
+     list eating the top of the screen instead of a horizontal strip. */
+  .settings-nav-list {
+    display: flex;
     flex-direction: row;
     flex-wrap: nowrap;
     gap: 6px;
@@ -9736,6 +9753,16 @@ a.settings-action-row,
     width: 100%;
     min-width: 0;
   }
+  /* Theme row (Auto/Light/Dark pills): the wide pill group squeezes the
+     description into a one-word-per-line column on phone. Stack it so the
+     text gets the full width and the pills sit on their own row below. */
+  .settings-card-row:has(.settings-theme-options) {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+  .settings-theme-options {
+    width: 100%;
+  }
 
   /* Notification dropdown: anchor right with a small inset so it
      doesn't kiss the viewport edge. Wider than the 184px desktop
@@ -9762,11 +9789,1534 @@ a.settings-action-row,
   }
 }
 
+/* ----- PHONE TOPBAR — keep the action cluster from overflowing -----
+   With the ≤980 block now wrapping .topbar-inner and dropping .search to
+   its own full-width row, the brand + action cluster share row 1. Compact
+   the action buttons and let the cluster wrap (right-aligned) rather than
+   push past the viewport edge, so there is no horizontal scroll. */
+@media (max-width: 560px) {
+  .top-actions {
+    gap: 4px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+  .top-actions .toolbar-button,
+  .top-actions .write-open {
+    min-height: 40px;
+    height: 40px;
+    padding: 0 10px;
+    font-size: 13px;
+  }
+  .top-actions .icon-button.icon-only {
+    width: 40px;
+    min-width: 40px;
+    padding: 0;
+  }
+  .top-actions-separator {
+    display: none;
+  }
+}
+
+/* ===== MOBILE DETAIL = FULL-SCREEN DRILL-IN =====
+   On desktop the detail panel is the 3rd column. Stacked on a phone it
+   lands at the very bottom of a multi-thousand-px page, so tapping a memory
+   appeared to do nothing — the detail rendered far below the fold. Here the
+   detail panel becomes a fixed, full-screen layer that slides in when a
+   memory is selected (.content-grid loses .detail-hidden) and slides out on
+   close. Reuses the existing selection state machine — no JS change. */
+@media (max-width: 768px) {
+  /* Desktop drag-to-resize is a mouse affordance; remove the invisible 14px
+     grab handles (they sit at panel edges and can eat taps) and drop any
+     drag-derived fixed column widths on touch. */
+  .content-grid > .col-resizer {
+    display: none !important;
+  }
+  .content-grid.resizable {
+    grid-template-columns: 1fr !important;
+  }
+
+  .content-grid > .detail-panel {
+    position: fixed !important;
+    inset: 0 !important;
+    /* Below the login gate (z30) and every modal sheet (z100+) so an
+       open detail can never bury the auth screen — it only ever covers
+       the browse list beneath it. */
+    z-index: 20;
+    width: 100vw !important;
+    max-width: 100vw !important;
+    height: 100dvh !important;
+    min-height: 0 !important;
+    margin: 0 !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    background: var(--surface);
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    opacity: 1 !important;
+    pointer-events: auto !important;
+    transform: translateX(100%) !important;
+    transition: transform 0.34s cubic-bezier(0.32, 0.72, 0, 1) !important;
+  }
+  /* Nothing selected: park the detail layer off-screen right. */
+  .content-grid.detail-hidden > .detail-panel {
+    transform: translateX(100%) !important;
+    pointer-events: none !important;
+  }
+  /* Selected (normal or enlarged): slide the full-screen detail in. */
+  .content-grid:not(.detail-hidden) > .detail-panel,
+  .content-grid.detail-enlarged > .detail-panel {
+    transform: translateX(0) !important;
+    pointer-events: auto !important;
+  }
+  /* The browse list stays put underneath — no enlarge slide-away on mobile. */
+  .content-grid.detail-enlarged > .rooms-panel,
+  .content-grid.detail-enlarged > .drawers-panel {
+    transform: none !important;
+    opacity: 1 !important;
+    flex-grow: 1 !important;
+    flex-basis: auto !important;
+    pointer-events: auto !important;
+  }
+  /* Keep the close (back) control pinned and tappable while detail scrolls;
+     the maximize control is pointless once the panel is already full-screen. */
+  .detail-panel .detail-panel-close {
+    position: fixed !important;
+    top: 12px;
+    right: 12px;
+    z-index: 65;
+  }
+  .detail-panel .detail-panel-maximize {
+    display: none !important;
+  }
+  /* Detail header: the 4-column metadata strip (drawer-id / date / source /
+     author) is fixed-height and overlaps the title at phone width. Let it
+     wrap, drop the fixed height, reserve space at the right for the close
+     button, and keep the long drawer-id hash from forcing the row wide. */
+  .detail-panel .detail-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 16px;
+    height: auto;
+    min-height: 0;
+    padding: 14px 56px 12px 16px;
+    justify-content: flex-start;
+  }
+  .detail-panel .detail-meta > div {
+    min-width: 0;
+  }
+  .detail-panel .detail-meta .drawer-id-copy {
+    max-width: 150px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /* Make the close (back) control an obvious, touch-sized button. */
+  .detail-panel .detail-panel-close {
+    width: 40px;
+    height: 40px;
+    background: var(--surface-strong);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+  }
+}
+
 /* Defensive: prevent any rogue horizontal overflow at any width.
    Mobile layouts are full-width by design; horizontal scroll
    below 768px is always a bug, not a feature. */
 @media (max-width: 768px) {
   body {
     overflow-x: hidden;
+  }
+}
+
+/* ===== MOBILE APP LAYOUT OVERHAUL =====
+   Mobile keeps Apricity's glass panels, lifted memory cards, blue accent,
+   and iOS-style motion, but stops inheriting the desktop three-pane model.
+   Browse becomes: sticky top chrome -> horizontal scope shelf -> primary
+   memories viewport -> full-screen detail drill-in. */
+@media (max-width: 768px) {
+  .topbar {
+    position: sticky;
+    top: 0;
+    z-index: 25;
+    margin-bottom: 0;
+    background: var(--surface-strong);
+    backdrop-filter: blur(24px);
+  }
+
+  .topbar-inner {
+    padding: 10px 12px 12px;
+    gap: 8px 10px;
+  }
+
+  .brand {
+    flex: 0 1 auto;
+    min-width: 0;
+    gap: 10px;
+  }
+
+  .brand-mark,
+  .brand-logo {
+    width: 44px;
+    height: 44px;
+  }
+
+  .brand-text {
+    display: flex;
+  }
+
+  .brand-name {
+    font-size: 18px;
+    letter-spacing: 0;
+  }
+
+  .brand-subtitle {
+    display: none;
+  }
+
+  .top-actions {
+    flex: 0 1 auto;
+    max-width: calc(100% - 56px);
+    margin-left: auto;
+    gap: 4px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .top-actions .toolbar-button,
+  .top-actions .write-open {
+    min-height: 40px;
+    height: 40px;
+    padding: 0 10px;
+    font-size: 13px;
+  }
+
+  .top-actions .icon-button.icon-only,
+  .top-actions .menu-button.toolbar-button.icon-only {
+    width: 40px;
+    min-width: 40px;
+    height: 40px;
+    min-height: 40px;
+  }
+
+  .top-actions-separator,
+  .search .hint {
+    display: none;
+  }
+
+  .search {
+    order: 3;
+    flex: 1 1 100%;
+    max-width: none;
+    height: 42px;
+    border-radius: 13px;
+  }
+
+  .search::before {
+    border-radius: 15px;
+  }
+
+  .main {
+    padding: 12px;
+    overflow: visible;
+  }
+
+  .content-grid,
+  .content-grid.resizable {
+    display: flex !important;
+    flex-direction: column;
+    gap: 12px;
+    overflow: visible;
+  }
+
+  .content-grid > .col-resizer {
+    display: none !important;
+  }
+
+  .panel {
+    border-radius: 18px;
+  }
+
+  .rooms-panel,
+  .drawers-panel,
+  .detail-panel {
+    height: auto;
+    min-height: 0;
+    max-height: none;
+  }
+
+  .rooms-panel {
+    flex: none !important;
+    width: 100%;
+    overflow: hidden;
+  }
+
+  .rooms-panel .panel-header {
+    height: auto;
+    min-height: 0;
+    padding: 12px 14px 4px;
+    border-bottom: 0;
+  }
+
+  .rooms-panel .panel-header h2 {
+    font-size: 15px;
+  }
+
+  .rooms-panel .panel-header p {
+    margin-top: 2px;
+    font-size: 12px;
+    min-height: 0;
+  }
+
+  .room-nav {
+    display: flex;
+    flex: none;
+    flex-wrap: nowrap;
+    gap: 8px;
+    max-height: none;
+    padding: 6px 12px 12px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scroll-snap-type: x proximity;
+    -webkit-mask-image: none;
+    mask-image: none;
+  }
+
+  .room-row,
+  .all-memory-row {
+    display: block;
+    flex: 0 0 auto;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    content-visibility: visible;
+    contain-intrinsic-size: auto;
+    scroll-snap-align: start;
+  }
+
+  .all-memory-row {
+    margin-bottom: 0;
+    padding-bottom: 0;
+  }
+
+  .room-row .menu-wrap {
+    display: none;
+  }
+
+  .room-item,
+  .all-memory-item {
+    min-height: 40px;
+    gap: 8px;
+    padding: 0 12px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: var(--surface-strong);
+    white-space: nowrap;
+  }
+
+  .room-row:hover .room-item,
+  .room-item:hover,
+  .all-memory-item:hover {
+    background: var(--surface-strong);
+  }
+
+  .room-row.active .room-item,
+  .room-item.active,
+  .all-memory-row.active .all-memory-item {
+    background: var(--accent-soft);
+    border-color: rgba(63, 148, 186, 0.32);
+  }
+
+  .room-item span,
+  .all-memory-item span {
+    max-width: min(52vw, 220px);
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .room-item strong,
+  .all-memory-item strong {
+    font-size: 12px;
+  }
+
+  .wing-drill-item .wing-drill-chevron {
+    margin-left: 0;
+  }
+
+  .room-nav-back-bar,
+  .room-nav-wing-header {
+    flex: 0 0 100%;
+  }
+
+  .room-nav-back-bar {
+    padding: 0 2px;
+  }
+
+  .room-nav-wing-header {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin: 0;
+    padding: 0 2px 2px;
+    border-bottom: 0;
+  }
+
+  .room-nav-wing-header strong {
+    font-size: 14px;
+    letter-spacing: 0;
+  }
+
+  .room-nav-wing-header span {
+    flex: 0 0 auto;
+    font-size: 12px;
+  }
+
+  .drawers-panel {
+    flex: none !important;
+    width: 100%;
+    height: min(62dvh, 620px);
+    min-height: 420px;
+    overflow: hidden;
+  }
+
+  .drawers-panel > .detail-panel-actions {
+    display: none !important;
+  }
+
+  .drawers-panel .panel-header {
+    height: auto;
+    min-height: 0;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 12px 14px;
+  }
+
+  .drawers-panel .panel-header h2 {
+    font-size: 16px;
+  }
+
+  .drawers-panel .panel-tools {
+    flex: 0 1 auto;
+    margin-top: 0;
+    justify-content: flex-end;
+  }
+
+  .drawer-list {
+    padding: 10px 12px 14px;
+  }
+
+  .drawer-card {
+    border-radius: 14px;
+  }
+
+  .drawer-card:hover,
+  .drawer-card.active:hover {
+    transform: none;
+  }
+
+  .content-grid.drawers-enlarged {
+    gap: 12px;
+  }
+
+  .content-grid.drawers-enlarged > .rooms-panel,
+  .content-grid.drawers-enlarged > .drawers-panel {
+    flex: none !important;
+    opacity: 1;
+    pointer-events: auto;
+    transform: none;
+  }
+
+  .content-grid > .detail-panel {
+    position: fixed !important;
+    inset: 0 !important;
+    z-index: 28;
+    display: flex;
+    flex-direction: column;
+    width: 100vw !important;
+    max-width: 100vw !important;
+    height: 100dvh !important;
+    min-height: 0 !important;
+    margin: 0 !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    background: var(--bg);
+    overflow: hidden;
+    opacity: 1 !important;
+    pointer-events: auto !important;
+    transform: translateX(100%) !important;
+    transition: transform 0.34s cubic-bezier(0.32, 0.72, 0, 1) !important;
+  }
+
+  .content-grid.detail-hidden > .detail-panel,
+  .content-grid.drawers-enlarged.detail-hidden > .detail-panel {
+    transform: translateX(100%) !important;
+    pointer-events: none !important;
+  }
+
+  .content-grid:not(.detail-hidden) > .detail-panel,
+  .content-grid.detail-enlarged > .detail-panel {
+    transform: translateX(0) !important;
+    pointer-events: auto !important;
+  }
+
+  .detail-panel > .detail-panel-actions {
+    position: static !important;
+    display: contents;
+    padding: 0;
+    background: transparent;
+    box-shadow: none;
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .detail-panel .detail-panel-close {
+    position: fixed !important;
+    top: calc(10px + env(safe-area-inset-top));
+    right: 12px;
+    z-index: 65;
+    width: 40px;
+    height: 40px;
+    background: var(--surface-strong);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    color: var(--danger);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+  }
+
+  .detail-panel .detail-panel-close svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  .detail-panel .detail-panel-maximize {
+    display: none !important;
+  }
+
+  .detail {
+    flex: 1;
+    border-radius: 0;
+    -webkit-mask-image: none;
+    mask-image: none;
+  }
+
+  .detail-panel .detail-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 16px;
+    height: auto;
+    min-height: 0;
+    padding: calc(14px + env(safe-area-inset-top)) 58px 12px 16px;
+    justify-content: flex-start;
+  }
+
+  .detail-panel .detail-meta > div {
+    min-width: 0;
+  }
+
+  .detail-panel .detail-meta .drawer-id-copy {
+    max-width: 150px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .markdown {
+    padding: 22px 16px calc(120px + env(safe-area-inset-bottom));
+    font-size: 15.5px;
+    line-height: 1.6;
+  }
+
+  .markdown h1 {
+    font-size: 26px;
+    line-height: 1.16;
+  }
+
+  .markdown h2 {
+    font-size: 21px;
+  }
+
+  .markdown pre.code-block {
+    margin-inline: -4px;
+    padding: 12px;
+    font-size: 12.5px;
+  }
+
+  .detail-panel-tunnel-info {
+    display: none !important;
+  }
+
+  .detail-panel-edit,
+  .detail-panel-delete,
+  .detail-panel-retry {
+    position: absolute;
+    bottom: calc(18px + env(safe-area-inset-bottom));
+    width: 48px;
+    height: 48px;
+  }
+
+  .detail-panel-delete { right: 16px; }
+  .detail-panel-edit { right: 76px; }
+  .detail-panel-retry { right: 136px; }
+
+  .detail-panel-edit[data-edit-drawer-id],
+  .detail-panel-delete[data-drawer-id],
+  .detail-panel-delete[data-tunnel-id],
+  .detail-panel-retry[data-retry-drawer-id] {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateY(0) scale(1);
+  }
+
+  .detail-edit-grid {
+    display: block;
+  }
+
+  .detail-editor-chips {
+    position: static;
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    overflow-x: auto;
+    overflow-y: visible;
+    -webkit-mask-image: none;
+    mask-image: none;
+  }
+
+  .detail-editor-chip {
+    flex: 0 0 auto;
+    height: 34px;
+    padding: 0 4px 0 10px;
+  }
+
+  .detail-editor-chip input {
+    width: 118px;
+  }
+
+  .detail-editor-toolbar-sep {
+    flex: 0 0 1px;
+    align-self: stretch;
+    height: 28px;
+    margin: 0 2px;
+    background: var(--line);
+  }
+
+  .detail-editor-tool-group {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .detail-editor-tool {
+    display: inline-grid;
+    place-items: center;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    border: 1px solid var(--line);
+    border-radius: 50%;
+    background: var(--surface);
+    color: var(--text);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  .detail-editor-tool svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  .detail-editor-callout-menu {
+    top: calc(100% + 6px);
+    left: auto;
+    right: 12px;
+  }
+
+  .facts-panel {
+    margin-top: 14px;
+    border-radius: 18px;
+  }
+
+  .facts-panel .panel-header {
+    height: auto;
+    min-height: 0;
+    align-items: flex-start;
+    padding: 14px;
+  }
+
+  .facts-panel .panel-tools {
+    flex: 1 1 100%;
+    justify-content: flex-start;
+    margin-top: 4px;
+  }
+
+  .facts {
+    max-height: 58dvh;
+    overflow-y: auto;
+  }
+
+  .footer {
+    margin-top: 16px;
+  }
+
+  .footer-inner {
+    padding: 18px 16px;
+  }
+}
+
+@media (max-width: 520px) {
+  .brand-text {
+    display: none;
+  }
+
+  #labBtn {
+    display: none;
+  }
+
+  .top-actions {
+    max-width: calc(100% - 54px);
+    flex-wrap: nowrap;
+  }
+
+  .top-actions .write-open {
+    min-width: 68px;
+    padding: 0 12px;
+  }
+
+  #draftsBtn {
+    min-width: 72px;
+    padding: 0 12px;
+  }
+
+  .top-actions .icon-button.icon-only,
+  .top-actions .menu-button.toolbar-button.icon-only {
+    width: 36px;
+    min-width: 36px;
+    height: 36px;
+    min-height: 36px;
+  }
+
+  .drawers-panel {
+    height: calc(100dvh - 240px);
+    min-height: 360px;
+  }
+
+  .drawers-panel .panel-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .drawers-panel .panel-tools {
+    justify-content: flex-start;
+  }
+
+  .inline-field {
+    width: 100%;
+  }
+
+  .inline-field select {
+    width: 100%;
+  }
+
+  .room-item span,
+  .all-memory-item span {
+    max-width: 50vw;
+  }
+
+  .view-toggle {
+    flex: 1 1 auto;
+  }
+
+  .add-fact-button {
+    flex: 0 0 auto;
+  }
+}
+
+@media (max-width: 360px) {
+  .brand {
+    display: none;
+  }
+
+  .top-actions {
+    width: 100%;
+    max-width: none;
+    justify-content: space-between;
+    gap: 3px;
+  }
+
+  .top-actions .toolbar-button,
+  .top-actions .write-open {
+    height: 36px;
+    min-height: 36px;
+    font-size: 12px;
+  }
+
+  .top-actions .write-open {
+    min-width: 60px;
+    padding: 0 10px;
+  }
+
+  #draftsBtn {
+    min-width: 64px;
+    padding: 0 10px;
+  }
+
+  .top-actions .icon-button.icon-only,
+  .top-actions .menu-button.toolbar-button.icon-only {
+    width: 32px;
+    min-width: 32px;
+    height: 32px;
+    min-height: 32px;
+  }
+
+  .top-actions .icon-button.icon-only svg,
+  .top-actions .menu-button.toolbar-button.icon-only svg {
+    width: 17px;
+    height: 17px;
+  }
+}
+
+/* Mobile toolbar overflow fix: keep the brand and notification status visible,
+   then move secondary commands into the existing popover-menu vocabulary. */
+.mobile-actions-wrap {
+  display: none;
+}
+
+.mobile-actions-menu {
+  min-width: 232px;
+}
+
+.mobile-actions-menu .action-item {
+  min-height: 40px;
+}
+
+.mobile-actions-menu [hidden] {
+  display: none !important;
+}
+
+.mobile-actions-menu .mobile-action-primary {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.mobile-menu-section-label {
+  margin: 6px 8px 2px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.mobile-actions-menu .theme-option-check {
+  margin-left: auto;
+}
+
+.mobile-actions-menu .action-item.is-active {
+  background: var(--accent-soft);
+}
+
+.mobile-actions-menu .action-item.is-active .theme-option-check {
+  opacity: 1;
+}
+
+.mobile-actions-menu .action-item.is-active .theme-option-label,
+.mobile-actions-menu .action-item.is-active .action-icon {
+  color: var(--accent);
+}
+
+@media (max-width: 768px) {
+  .mobile-actions-wrap {
+    display: grid;
+  }
+
+  .top-actions {
+    flex: 0 0 auto;
+    width: auto;
+    max-width: none;
+    margin-left: auto;
+    flex-wrap: nowrap;
+    justify-content: flex-end;
+    gap: 4px;
+  }
+
+  .top-actions > #labBtn,
+  .top-actions > #writeOpen,
+  .top-actions > #draftsBtn,
+  .top-actions > .top-actions-separator,
+  .top-actions > #trashBtn,
+  .top-actions > .theme-menu-wrap,
+  .top-actions > #settingsBtn {
+    display: none !important;
+  }
+
+  .top-actions > .notifications-menu-wrap {
+    display: grid;
+  }
+
+  .top-actions .icon-button.icon-only,
+  .top-actions .menu-button.toolbar-button.icon-only,
+  .mobile-actions-button {
+    width: 40px;
+    min-width: 40px;
+    height: 40px;
+    min-height: 40px;
+  }
+
+  .mobile-actions-button svg {
+    width: 20px;
+    height: 20px;
+  }
+
+  .mobile-actions-menu {
+    position: fixed;
+    top: calc(112px + env(safe-area-inset-top));
+    right: 0;
+    z-index: 80;
+    min-width: min(268px, calc(100vw - 24px));
+    max-width: calc(100vw - 24px);
+    padding: 8px;
+    border-radius: 16px;
+  }
+}
+
+@media (max-width: 520px) {
+  .brand {
+    display: flex;
+  }
+
+  .brand-text {
+    display: none;
+  }
+
+  .top-actions {
+    width: auto;
+    max-width: none;
+    gap: 4px;
+  }
+}
+
+@media (max-width: 360px) {
+  .brand {
+    display: flex;
+  }
+
+  .brand-mark,
+  .brand-logo {
+    width: 38px;
+    height: 38px;
+  }
+
+  .top-actions {
+    width: auto;
+    max-width: none;
+    justify-content: flex-end;
+    gap: 4px;
+  }
+
+  .top-actions .icon-button.icon-only,
+  .top-actions .menu-button.toolbar-button.icon-only,
+  .mobile-actions-button {
+    width: 38px;
+    min-width: 38px;
+    height: 38px;
+    min-height: 38px;
+  }
+
+  .mobile-actions-menu {
+    top: calc(106px + env(safe-area-inset-top));
+  }
+}
+
+/* Mobile modal/sheet polish: every overlay should sit above the full-screen
+   detail drill-in, open inside the viewport, and keep its own scroll state. */
+@media (max-width: 768px) {
+  body:has(.write-sheet:not(.hidden)),
+  body:has(.edit-sheet:not(.hidden)),
+  body:has(.confirm-sheet:not(.hidden)),
+  body:has(.settings-overlay:not(.hidden)) {
+    overflow: hidden;
+  }
+
+  .write-sheet,
+  .edit-sheet,
+  .settings-overlay {
+    z-index: 90;
+  }
+
+  .confirm-sheet {
+    z-index: 100;
+  }
+
+  .write-sheet,
+  .edit-sheet {
+    place-items: end center;
+    padding: calc(8px + env(safe-area-inset-top)) 8px 0;
+  }
+
+  .write-panel,
+  .edit-panel,
+  .lab-panel {
+    width: min(100%, 680px);
+    max-width: 100%;
+    max-height: calc(100dvh - 8px - env(safe-area-inset-top));
+    border-radius: 22px 22px 0 0;
+    padding: 16px 16px calc(16px + env(safe-area-inset-bottom));
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .write-sheet:not(.hidden) .write-panel,
+  .write-sheet:not(.hidden) .lab-panel,
+  .edit-sheet:not(.hidden) .edit-panel {
+    transform-origin: bottom center;
+    animation: mobile-sheet-in 0.28s cubic-bezier(0.32, 0.72, 0, 1);
+  }
+
+  .write-sheet.closing .write-panel,
+  .write-sheet.closing .lab-panel,
+  .edit-sheet.closing .edit-panel {
+    animation: mobile-sheet-out 0.22s ease-in forwards;
+  }
+
+  @keyframes mobile-sheet-in {
+    from { opacity: 0; transform: translateY(24px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  @keyframes mobile-sheet-out {
+    from { opacity: 1; transform: translateY(0); }
+    to { opacity: 0; transform: translateY(18px); }
+  }
+
+  .write-header {
+    position: sticky;
+    top: -16px;
+    z-index: 8;
+    align-items: flex-start;
+    margin: -16px -16px 0;
+    padding: 16px 16px 12px;
+    border-bottom: 1px solid var(--line);
+    background: var(--surface-strong);
+    backdrop-filter: blur(18px);
+  }
+
+  .write-header h2 {
+    font-size: 21px;
+    line-height: 1.15;
+  }
+
+  .write-header p {
+    line-height: 1.35;
+  }
+
+  .sheet-close {
+    width: 42px;
+    min-width: 42px;
+    height: 42px;
+    min-height: 42px;
+  }
+
+  .write-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .write-panel textarea,
+  .edit-panel textarea {
+    min-height: 30dvh;
+    max-height: 48dvh;
+  }
+
+  .write-actions-row {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .write-actions-row .primary-action,
+  .write-actions-row .secondary-action,
+  .write-panel > .primary-action.save-memory,
+  .edit-panel > .primary-action.save-memory {
+    width: 100%;
+  }
+
+  .combo-menu {
+    max-height: min(240px, 42dvh);
+    overscroll-behavior: contain;
+  }
+
+  .draft-item {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 10px;
+    min-height: 0;
+    padding: 12px;
+  }
+
+  .draft-item strong {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .draft-item span {
+    overflow-wrap: anywhere;
+  }
+
+  .draft-actions {
+    width: 100%;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+  }
+
+  .draft-actions .primary-action {
+    flex: 1 1 96px;
+  }
+
+  .trash-footer {
+    position: sticky;
+    bottom: -16px;
+    margin: 0 -16px -16px;
+    padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
+    border-top: 1px solid var(--line);
+    background: var(--surface-strong);
+  }
+
+  .trash-footer .danger-button {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .notifications-menu {
+    position: fixed;
+    inset: calc(112px + env(safe-area-inset-top)) 12px auto 12px !important;
+    z-index: 80;
+    width: auto;
+    min-width: 0;
+    max-width: none;
+    max-height: calc(100dvh - 132px - env(safe-area-inset-top));
+  }
+
+  .settings-overlay {
+    display: grid;
+    place-items: stretch;
+    padding: 0;
+  }
+
+  .settings-shell-frame,
+  .settings-shell-wrap {
+    width: 100%;
+    max-width: none;
+    height: 100dvh;
+    min-height: 0;
+  }
+
+  .settings-shell-frame {
+    gap: 0;
+  }
+
+  .settings-shell {
+    width: 100%;
+    height: 100dvh;
+    border: 0;
+    border-radius: 0;
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .settings-shell-actions {
+    top: calc(10px + env(safe-area-inset-top));
+    right: 12px;
+    z-index: 20;
+    padding: 5px;
+  }
+
+  .settings-shell-close {
+    width: 28px;
+    height: 28px;
+  }
+
+  .settings-nav-pane {
+    min-width: 0;
+    padding: calc(10px + env(safe-area-inset-top)) 72px 10px 12px;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scroll-padding-right: 72px;
+  }
+
+  .settings-content-pane {
+    min-height: 0;
+    padding: 16px 14px calc(24px + env(safe-area-inset-bottom));
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .settings-overlay-hint {
+    display: none;
+  }
+
+  .settings-card-row,
+  .settings-action-row {
+    gap: 12px;
+    padding: 12px 14px;
+  }
+
+  .settings-account-actions {
+    align-items: stretch;
+    flex-direction: column-reverse;
+    gap: 10px;
+  }
+
+  .settings-account-actions .primary-action,
+  .settings-sign-out {
+    width: 100%;
+  }
+
+  .confirm-sheet {
+    padding: calc(16px + env(safe-area-inset-top)) 12px calc(16px + env(safe-area-inset-bottom));
+  }
+
+  .confirm-panel {
+    max-height: calc(100dvh - 32px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .lab-tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+  }
+
+  .lab-tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .lab-tab {
+    flex: 0 0 auto;
+    min-width: max-content;
+  }
+
+  .lab-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .lab-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .lab-actions-row {
+    align-items: stretch;
+  }
+
+  .lab-actions .primary-action,
+  .lab-actions .icon-button,
+  .lab-actions .danger-action {
+    justify-content: center;
+    width: 100%;
+  }
+
+  .lab-output {
+    max-height: 42dvh;
+  }
+}
+
+@media (max-width: 360px) {
+  .notifications-menu {
+    top: calc(106px + env(safe-area-inset-top)) !important;
+    max-height: calc(100dvh - 126px - env(safe-area-inset-top));
+  }
+}
+
+/* ===== MOBILE-FIRST POLISH: bottom-sheet menus + chip scroll affordances =====
+   Appended last so these win over the earlier mobile rules. */
+@media (max-width: 768px) {
+  /* Grab handle on every bottom-sheet panel (write/edit/drafts/trash/fact/
+     tools all share .write-header, which is already position:sticky). */
+  .write-header {
+    padding-top: 20px !important;
+  }
+  .write-header::before {
+    content: "";
+    position: absolute;
+    top: 8px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 40px;
+    height: 4px;
+    border-radius: 999px;
+    background: var(--line);
+    z-index: 9;
+  }
+
+  /* The ☰ actions menu becomes a bottom sheet (was a top-right dropdown).
+     The menu is JS-positioned via inline top/left styles, so the anchoring
+     here must be !important to win over those inline styles. */
+  .mobile-actions-menu {
+    position: fixed !important;
+    left: 0 !important;
+    right: 0 !important;
+    bottom: 0 !important;
+    top: auto !important;
+    /* JS positions this menu with an inline transform; override it so the
+       sheet anchors to the bottom (opacity of mobile-sheet-in still fades in). */
+    transform: none !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    max-height: 82dvh;
+    margin: 0 !important;
+    padding: 0 10px calc(14px + env(safe-area-inset-bottom));
+    border-radius: 22px 22px 0 0;
+    border-bottom: 0;
+    overflow-y: auto;
+    transform-origin: bottom center;
+    animation: mobile-sheet-in 0.3s cubic-bezier(0.32, 0.72, 0, 1);
+    z-index: 100;
+  }
+  .mobile-actions-menu::before {
+    content: "";
+    display: block;
+    width: 40px;
+    height: 4px;
+    margin: 10px auto 8px;
+    border-radius: 999px;
+    background: var(--line);
+  }
+  .mobile-actions-menu .action-item {
+    min-height: 48px;
+  }
+  /* The frosted topbar (backdrop-filter) is a containing block for the fixed
+     ☰ menu, which trapped it at the topbar's bottom. Drop the blur only while
+     the menu is open so the sheet anchors to the viewport bottom. */
+  body:has(.mobile-actions-menu:not(.hidden)) .topbar {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+
+  /* Confirm dialogs (delete, etc.) become bottom action sheets. The login
+     gate stays centered — it is a full sign-in form, not an action sheet. */
+  .confirm-sheet:not(#loginSheet) {
+    place-items: end center;
+    padding: 0 8px calc(8px + env(safe-area-inset-bottom));
+  }
+  .confirm-sheet:not(#loginSheet) .confirm-panel {
+    width: 100%;
+    max-width: 100%;
+    border-radius: 22px 22px 0 0;
+    padding: 20px 22px calc(20px + env(safe-area-inset-bottom));
+    transform-origin: bottom center;
+    animation: mobile-sheet-in 0.3s cubic-bezier(0.32, 0.72, 0, 1);
+  }
+  .confirm-sheet:not(#loginSheet) .confirm-panel::before {
+    content: "";
+    display: block;
+    width: 40px;
+    height: 4px;
+    margin: 0 auto 14px;
+    border-radius: 999px;
+    background: var(--line);
+  }
+
+  /* Chip strip: momentum scroll + a soft right-edge fade hinting more chips. */
+  .room-nav {
+    -webkit-overflow-scrolling: touch;
+    scroll-padding-inline: 12px;
+    -webkit-mask-image: linear-gradient(to right, #000 0, #000 calc(100% - 22px), transparent 100%);
+    mask-image: linear-gradient(to right, #000 0, #000 calc(100% - 22px), transparent 100%);
+  }
+
+  /* Safe-area: clear the notch up top and the home indicator at the bottom. */
+  .topbar-inner {
+    padding-top: calc(10px + env(safe-area-inset-top));
+  }
+  .footer {
+    padding-bottom: calc(12px + env(safe-area-inset-bottom));
+  }
+}
+
+/* ===== MOBILE REAL-DEVICE FIXES (round 2) ===== */
+@media (max-width: 768px) {
+  /* Rooms-view gap: the back-bar + wing-header were flex:0 0 100% inside the
+     horizontal chip scroller, so each ate a full screen-width before the room
+     chips. Make them content-width so the chips follow immediately, and pin
+     the back button at the left so it stays reachable while chips scroll. */
+  .room-nav-back-bar,
+  .room-nav-wing-header {
+    flex: 0 0 auto !important;
+    align-self: center;
+  }
+  .room-nav-back-bar {
+    position: sticky;
+    left: 0;
+    z-index: 3;
+    padding-right: 12px;
+    background: linear-gradient(to right, var(--surface) 70%, transparent);
+  }
+  .room-nav-wing-header {
+    flex-direction: row;
+    align-items: baseline;
+    gap: 6px;
+    margin: 0;
+    padding: 0 4px 0 0;
+    border-bottom: 0;
+  }
+  .room-nav-wing-header strong {
+    font-size: 14px;
+  }
+
+  /* Apricity wordmark was hidden on mobile — show the name (drop the subtitle
+     to keep the bar compact). */
+  .brand-text {
+    display: block !important;
+  }
+  .brand-name {
+    font-size: 16px;
+    line-height: 1.1;
+  }
+  .brand-subtitle {
+    display: none !important;
+  }
+
+  /* Footer info collapsed to a single column on phones, wasting the width.
+     Two columns; drop the cell dividers (the grid gap separates them). */
+  .footer-info {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 6px 22px;
+  }
+  .footer-cell::before,
+  .footer-cell::after {
+    display: none !important;
+  }
+}
+
+/* Mobile search, apple-grade. Collapsed: a clean circular icon button that
+   matches the bell/menu exactly (no rotating glow ring, no rounded-square, no
+   heavy border). Tapped: a full-width clean field on its own row. */
+@media (max-width: 768px) {
+  .topbar-inner {
+    flex-wrap: wrap;
+    position: relative;
+  }
+  /* Brand grows to fill the left so the search + bell + menu group together
+     as one icon cluster on the right (apple-style nav). */
+  .topbar-inner .brand {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  /* Remove the desktop rotating conic-glow ring (drawer-card-glow-rotate). */
+  .topbar-inner .search::before,
+  .topbar-inner .search::after {
+    display: none !important;
+    content: none !important;
+    animation: none !important;
+  }
+  /* Collapsed = a 40px circle icon button, matching .icon-button bell/menu. */
+  .topbar-inner .search {
+    order: 2;
+    flex: 0 0 40px;
+    width: 40px;
+    height: 40px;
+    min-width: 40px;
+    max-width: 40px;
+    margin-left: 0;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 999px;
+    background: transparent;
+    backdrop-filter: none;
+    box-shadow: none;
+    isolation: auto;
+    overflow: hidden;
+    justify-content: center;
+    align-items: center;
+    transition: background 0.18s ease;
+  }
+  .topbar-inner .search:hover {
+    background: var(--surface-strong);
+  }
+  .topbar-inner .search .search-icon {
+    pointer-events: none;
+    flex: 0 0 auto;
+    color: var(--muted);
+  }
+  .topbar-inner .search > input {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    padding: 0;
+    opacity: 0;
+    border: 0;
+    background: transparent;
+    cursor: pointer;
+  }
+  .topbar-inner .search .hint {
+    display: none;
+  }
+  /* Expanded (focused) = full-width clean field on its own row, subtle fill,
+     a soft (not neon) focus ring. */
+  .topbar-inner .search:focus-within {
+    order: 9;
+    flex: 1 1 100%;
+    width: 100%;
+    min-width: 0;
+    max-width: none;
+    height: 42px;
+    margin: 10px 0 0;
+    padding: 0 12px 0 14px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: var(--surface);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+    justify-content: flex-start;
+  }
+  .topbar-inner .search:focus-within > input {
+    position: static;
+    inset: auto;
+    height: auto;
+    padding: 0;
+    opacity: 1;
+    cursor: text;
+  }
+  .top-actions {
+    order: 3;
+  }
+}
+
+/* KG / Tools fact list: roomier touch cards, clearer subject→predicate→object
+   (predicate tinted), and a taller results area inside the Tools bottom sheet. */
+@media (max-width: 768px) {
+  .lab-output {
+    max-height: 56dvh;
+    padding: 8px;
+    gap: 8px;
+  }
+  .lab-fact {
+    padding: 12px 14px;
+    gap: 8px;
+    background: var(--surface-strong);
+    border-radius: 12px;
+  }
+  .lab-fact-spo {
+    font-size: 14px;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+  }
+  .lab-fact-spo strong {
+    color: var(--text);
+    font-weight: 650;
+  }
+  .lab-fact-spo em {
+    color: var(--accent);
+    font-weight: 600;
+    font-size: 12px;
   }
 }

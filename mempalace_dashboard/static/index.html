@@ -94,7 +94,7 @@
     />
     <meta name="twitter:image" content="/apricity-logo.png" />
 
-    <link rel="stylesheet" href="/styles.css?v=366" />
+    <link rel="stylesheet" href="/styles.css?v=376" />
   </head>
   <body>
     <div class="shell">
@@ -251,6 +251,81 @@
                 <path d="M19.4 12a7.5 7.5 0 0 0-.08-1.16l2.07-1.62-2-3.46-2.45.98a7.5 7.5 0 0 0-2-1.16L14.5 2h-4l-.44 2.58a7.5 7.5 0 0 0-2 1.16l-2.45-.98-2 3.46 2.07 1.62A7.5 7.5 0 0 0 5.6 12c0 .4.03.78.08 1.16L3.6 14.78l2 3.46 2.45-.98c.6.47 1.27.86 2 1.16L10.5 21h4l.44-2.58c.73-.3 1.4-.69 2-1.16l2.45.98 2-3.46-2.07-1.62c.05-.38.08-.77.08-1.16Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
               </svg>
             </button>
+            <div class="menu-wrap mobile-actions-wrap">
+              <button class="icon-button toolbar-button icon-only menu-button mobile-actions-button" id="mobileActionsBtn" type="button" aria-label="More actions" data-menu="mobile-actions-menu" aria-haspopup="menu" aria-expanded="false" title="More actions">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M5 7h14M5 12h14M5 17h14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
+                </svg>
+              </button>
+              <div class="action-menu mobile-actions-menu hidden" role="menu" data-menu-panel="mobile-actions-menu" id="mobileActionsMenu">
+                <button class="action-item mobile-action-proxy mobile-action-primary" type="button" role="menuitem" data-mobile-proxy="writeOpen">
+                  <svg class="action-icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M5 19h4.2L19.4 8.8a2 2 0 0 0-2.8-2.8L6.4 16.2 5 19Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+                    <path d="m14.8 7.8 1.4 1.4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+                  </svg>
+                  <span>Write</span>
+                </button>
+                <button class="action-item mobile-action-proxy" type="button" role="menuitem" data-mobile-proxy="draftsBtn">
+                  <svg class="action-icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M6 4h9l3 3v13H6Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+                    <path d="M14 4v4h4M9 12h6M9 16h6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                  <span>Drafts</span>
+                </button>
+                <button class="action-item mobile-action-proxy" type="button" role="menuitem" data-mobile-proxy="trashBtn">
+                  <svg class="action-icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M5 7h14" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" fill="none"/>
+                    <path d="M10 7V5.5A1.5 1.5 0 0 1 11.5 4h1A1.5 1.5 0 0 1 14 5.5V7" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" fill="none"/>
+                    <path d="M7 7h10l-.9 11.2A1.8 1.8 0 0 1 14.3 20H9.7a1.8 1.8 0 0 1-1.8-1.8L7 7Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" fill="none"/>
+                  </svg>
+                  <span>Recently deleted</span>
+                </button>
+                <button class="action-item mobile-action-proxy" type="button" role="menuitem" data-mobile-proxy="settingsBtn">
+                  <svg class="action-icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.7"/>
+                    <path d="M19.4 12a7.5 7.5 0 0 0-.08-1.16l2.07-1.62-2-3.46-2.45.98a7.5 7.5 0 0 0-2-1.16L14.5 2h-4l-.44 2.58a7.5 7.5 0 0 0-2 1.16l-2.45-.98-2 3.46 2.07 1.62A7.5 7.5 0 0 0 5.6 12c0 .4.03.78.08 1.16L3.6 14.78l2 3.46 2.45-.98c.6.47 1.27.86 2 1.16L10.5 21h4l.44-2.58c.73-.3 1.4-.69 2-1.16l2.45.98 2-3.46-2.07-1.62c.05-.38.08-.77.08-1.16Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+                  </svg>
+                  <span>Settings</span>
+                </button>
+                <button class="action-item mobile-action-proxy" id="mobileLabAction" type="button" role="menuitem" data-mobile-proxy="labBtn" hidden>
+                  <svg class="action-icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M9 3v5.2L4.6 16a3.2 3.2 0 0 0 2.8 4.8h9.2a3.2 3.2 0 0 0 2.8-4.8L15 8.2V3" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="M8 3h8M8 15h8" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+                  </svg>
+                  <span>Tools</span>
+                </button>
+                <div class="mobile-menu-section-label" role="presentation">Theme</div>
+                <button class="action-item theme-option mobile-theme-option" type="button" role="menuitem" data-theme-option="auto">
+                  <svg class="action-icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.6"/>
+                    <path d="M12 3a9 9 0 0 1 0 18Z" fill="currentColor"/>
+                  </svg>
+                  <span class="theme-option-label">Auto</span>
+                  <svg class="theme-option-check" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="m5 12 5 5 9-11" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                </button>
+                <button class="action-item theme-option mobile-theme-option" type="button" role="menuitem" data-theme-option="light">
+                  <svg class="action-icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <circle cx="12" cy="12" r="4.5" fill="none" stroke="currentColor" stroke-width="1.7"/>
+                    <path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.6 4.6 6.7 6.7M17.3 17.3l2.1 2.1M19.4 4.6 17.3 6.7M6.7 17.3l-2.1 2.1" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" fill="none"/>
+                  </svg>
+                  <span class="theme-option-label">Light</span>
+                  <svg class="theme-option-check" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="m5 12 5 5 9-11" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                </button>
+                <button class="action-item theme-option mobile-theme-option" type="button" role="menuitem" data-theme-option="dark">
+                  <svg class="action-icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M20.5 14.4A8 8 0 1 1 9.6 3.5a6.8 6.8 0 0 0 10.9 10.9Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+                  </svg>
+                  <span class="theme-option-label">Dark</span>
+                  <svg class="theme-option-check" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="m5 12 5 5 9-11" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                </button>
+              </div>
+            </div>
           </div>
         </div><!-- /.topbar-inner -->
       </header>
@@ -1529,7 +1604,7 @@
          app.js. Order is preserved (app.js before lab.js) and all
          event handlers attach inside the scripts, so deferring is
          safe. Shaves the JS-execution stall off the first paint. -->
-    <script src="/app.js?v=295" defer></script>
+    <script src="/app.js?v=301" defer></script>
     <script src="/lab.js?v=4" defer></script>
   </body>
 </html>
