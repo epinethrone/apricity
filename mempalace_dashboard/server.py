@@ -873,19 +873,29 @@ def mark_drawers_seen(drawer_ids: list[str], seen_at: str | None = None) -> dict
     return mark_items_seen(drawer_ids, seen_at)
 
 
-def _mark_new_drawer_seen(result: dict) -> str:
-    """Mark a successful dashboard-created drawer as already seen.
+def _mark_drawer_self_seen(drawer_id: str) -> str:
+    """Mark a drawer as fully seen by the user themselves — BOTH the plain
+    seen-key (clears the card "Updated" dot) AND the "bell:"-prefixed key
+    (clears the notification bell). Any write that arrives through the
+    dashboard's own endpoints is a direct UI action by the user, so it must
+    not boomerang back as a notification. The bell namespace split (the card
+    dot vs. the bell use different keys in dashboard-seen.json) means
+    suppressing the bell requires the bell:<id> key too — marking only the
+    plain key (the old behavior) left dashboard actions re-appearing in the
+    bell. External MCP/client writes bypass this helper and still notify."""
+    drawer_id = str(drawer_id or "").strip()
+    if drawer_id:
+        # "bell:" must match BELL_SEEN_PREFIX in static/app.js.
+        mark_items_seen([drawer_id, f"bell:{drawer_id}"])
+    return drawer_id
 
-    Dashboard-originated creates are direct user actions, so they
-    should not boomerang back through the notification bell. External
-    MCP writes still arrive unseen because they bypass this helper.
-    """
+
+def _mark_new_drawer_seen(result: dict) -> str:
+    """Mark a successful dashboard-created drawer as already seen (both the
+    card dot and the bell). External MCP writes bypass this and still notify."""
     if not isinstance(result, dict):
         return ""
-    drawer_id = str(result.get("drawer_id") or "").strip()
-    if drawer_id:
-        mark_drawers_seen([drawer_id])
-    return drawer_id
+    return _mark_drawer_self_seen(result.get("drawer_id") or "")
 
 
 # ---------- fact lifecycle notification events ----------
@@ -1070,9 +1080,13 @@ def sync_fact_events(triples: list[dict]) -> list[dict]:
 
 
 def mark_fact_event_seen(fact_id: str, event: str) -> str:
+    # Dashboard-originated fact add/invalidate — born seen in BOTH the plain
+    # namespace and the "bell:" namespace so the user's own fact action
+    # doesn't boomerang into the notification bell (same bell-split reasoning
+    # as _mark_drawer_self_seen). External MCP fact writes bypass this.
     event_id = fact_event_id(fact_id, event)
     if event_id:
-        mark_items_seen([event_id])
+        mark_items_seen([event_id, f"bell:{event_id}"])
     return event_id
 
 
@@ -1677,6 +1691,13 @@ def update_memory(payload: dict) -> dict:
     # the server-side snapshot is no longer the only line of defense.
 
     result = mempalace_update_drawer(drawer_id, new_content, new_wing, new_room)
+    # A UI edit bumps the drawer's updated_at, which would otherwise surface
+    # it in the card "Updated" dot AND the notification bell — i.e. the user
+    # gets notified of their own edit. Mark it self-seen (both namespaces) so
+    # it doesn't boomerang. The stamp rides the next /api/palace poll in the
+    # `seen` map, arriving together with the bumped updated_at, so it never
+    # flashes in the bell. External MCP edits bypass this and still notify.
+    _mark_drawer_self_seen(drawer_id)
     return {"success": True, "result": result, "drawer_id": drawer_id}
 
 
@@ -2295,7 +2316,10 @@ def restore_version(payload: dict) -> dict:
     # the restore is younger than the preserved filed_at by definition).
     if new_drawer_id:
         _record_restored_drawer(new_drawer_id)
-        mark_drawers_seen([new_drawer_id])
+        # Both namespaces (card dot + bell) — a restore is a user action; for a
+        # recently-filed drawer the filed_at clamp alone won't keep it out of
+        # the bell, so the bell:<id> key is needed too.
+        _mark_drawer_self_seen(new_drawer_id)
     # Audit log entry for the restore action; then consume the original
     # delete/update-before snapshot so trash stops listing it. Behavior
     # parallels the tunnel branch above.

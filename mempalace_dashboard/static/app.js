@@ -3080,13 +3080,17 @@ function attachDrawerCardListeners() {
         }
       }
       // Auto-clear the bell entry for this drawer in the same frame
-      // as the click. markDrawerSeen() above already updated
-      // state._seenMap, but the notification dropdown is built off a
-      // separate render path that won't re-run on its own until the
-      // next 30s poll or full render(). Explicitly re-render the bell
-      // here so opening a card visibly removes its notification (and
-      // decrements the dot count) immediately — matches the iOS /
-      // Mail pattern where viewing a message clears its badge.
+      // as the click. A deliberate tap on a card IS the user "seeing"
+      // the memory, so it dismisses the bell (writes bell:<id>) — while
+      // a background 30s poll re-rendering the open drawer does NOT (it
+      // only ever writes the plain seen-key via renderDrawerDetail), so
+      // notifications are never silently cleared before a real tap.
+      // markDrawerSeen() above cleared the card "Updated" dot (plain
+      // <id>); markBellItemsSeen here clears the bell (bell:<id>). Both
+      // update state._seenMap synchronously, so the renderNotifications
+      // re-render below reflects the dismissal immediately — matches the
+      // iOS / Mail pattern where viewing a message clears its badge.
+      markBellItemsSeen([drawerId]);
       renderNotifications();
       // Update active class DIRECTLY in DOM — no re-render needed.
       // The cached card HTML doesn't include the active class, so we
@@ -6263,12 +6267,17 @@ async function commitEditMode() {
     }
     if (payload.wing) current.wing = payload.wing;
     if (payload.room) current.room = payload.room;
-    // updated_at bump means isRecentlyUpdated will return true for
-    // this drawer on the next render. seenAt for this user is
-    // already AT or after the new updated_at because we just
-    // viewed it (renderDrawerDetail stamps seen), so the marker
-    // won't appear — desired behavior for self-initiated edits.
+    // updated_at bump means isRecentlyUpdated / isBellUnseenDrawer would
+    // return true for this drawer on the next render. This is the user's
+    // OWN edit, so suppress both the card "Updated" dot AND the bell in the
+    // SAME frame — otherwise the edit flashes in the bell during the
+    // optimistic window before the server's seen-stamp arrives on the next
+    // /api/palace poll. Stamp updated_at first, then mark seen (>= it) in
+    // both namespaces. The server's update_memory mirrors this so other LAN
+    // clients stay consistent; this is the local-instant half.
     current.updated_at = new Date().toISOString();
+    markDrawerSeen(buf.drawerId);
+    markBellItemsSeen([buf.drawerId]);
   }
 
   // Reflect the post-edit selection state.
@@ -7900,8 +7909,11 @@ async function openTrashSheet() {
         };
         // Mark seen up-front so even if loadPalace returns the real
         // drawer before the placeholder swap below has a chance to
-        // run, the bell never sees it as new.
+        // run, the bell never sees it as new. Both namespaces: a
+        // recently-filed restored drawer is within the recency window,
+        // so the card-dot key alone won't keep it out of the bell.
         markDrawerSeen(placeholderId);
+        markBellItemsSeen([placeholderId]);
         state.palace.drawers.push(placeholder);
         // Snapshot for revert: we don't need to remember a position
         // since the placeholder is appended. On failure we just filter
@@ -7930,7 +7942,9 @@ async function openTrashSheet() {
               // the placeholder with the server's canonical row whose
               // drawer_id is realId, and we want THAT row to also be
               // pre-seen so the bell stays quiet after the refresh.
+              // (Server also self-seens on restore; this is the local half.)
               markDrawerSeen(realId);
+              markBellItemsSeen([realId]);
               if (state.selectedDrawerId === placeholderId) {
                 state.selectedDrawerId = realId;
               }
