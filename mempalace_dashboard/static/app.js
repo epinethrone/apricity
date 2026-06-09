@@ -1123,6 +1123,40 @@ function markdownLite(value) {
 // that touches these auto-invalidates the cache via the key mismatch.
 const _filteredDrawersCache = { key: null, value: null };
 
+// ---------- server-side search (large palaces) ----------
+// On a light-mode palace the full bodies aren't client-side, so query search
+// is delegated to /api/search. maybeRunServerSearch is the single choke point
+// (called from render) so EVERY way state.query changes — the search box, a
+// hash deep-link, a notification's "search this fact" — triggers a fetch.
+let _lastServerSearchQuery = null;
+async function runServerSearch(q) {
+  try {
+    const data = await fetchJson(`/api/search?q=${encodeURIComponent(q)}`);
+    // Drop stale responses: the user kept typing and a newer query is live.
+    if ((state.query || "") !== q) return;
+    state.searchResults = Array.isArray(data.drawers) ? data.drawers : [];
+    state._filteredDrawersCache = null;
+    _filteredDrawersCache.key = null;
+    render();
+  } catch (err) {
+    // Network blip — keep the prior results visible; the next keystroke retries.
+  }
+}
+const _debouncedServerSearch = debounce((q) => runServerSearch(q), 200);
+function maybeRunServerSearch() {
+  if (!state.palace || !state.palace.lightMode) return;
+  const q = state.query || "";
+  if (q === _lastServerSearchQuery) return; // already searched / in flight
+  _lastServerSearchQuery = q;
+  if (!q) {
+    // Cleared the query → back to browse mode; drop server results.
+    state.searchResults = null;
+    _filteredDrawersCache.key = null;
+    return;
+  }
+  _debouncedServerSearch(q);
+}
+
 function filteredDrawers() {
   // Defensive guard: state.palace is only set after loadPalace
   // resolves. Some call sites (the search-input listener, the
@@ -1137,12 +1171,19 @@ function filteredDrawers() {
   // array wholesale on every refresh; an in-place mutation of the
   // existing array would NOT invalidate, but the codebase never does
   // that — all writes go through the API and re-fetch the palace.
-  const cacheKey = `${state.palace.drawers.length}|${state.query}|${state.selectedWing}|${state.selectedRoom}|${state.sortBy}`;
+  const q = norm(state.query);
+  // On a large (light-mode) palace the bodies aren't in memory, so a global
+  // query is resolved SERVER-side (/api/search) and the results live in
+  // state.searchResults. maybeRunServerSearch (called from render) keeps that
+  // list in sync with state.query. Small palaces keep the classic in-memory
+  // filter — identical behavior, no network.
+  const usingServerSearch = !!(state.palace.lightMode && q);
+  const srLen = usingServerSearch && Array.isArray(state.searchResults) ? state.searchResults.length : 0;
+  const cacheKey = `${state.palace.drawers.length}|${state.query}|${state.selectedWing}|${state.selectedRoom}|${state.sortBy}|${usingServerSearch}|${srLen}`;
   if (_filteredDrawersCache.key === cacheKey
       && _filteredDrawersCache.palace === state.palace.drawers) {
     return _filteredDrawersCache.value;
   }
-  const q = norm(state.query);
   // Search is GLOBAL when a query is typed — once the user is asking
   // "find this thing", wing/room scope is the wrong default (they
   // almost never know which wing they originally filed it in, and
@@ -1151,17 +1192,22 @@ function filteredDrawers() {
   // room filters still apply for browsing (no query), so the
   // currently-active pill still narrows the visible list while
   // scrolling around.
-  let drawers = state.palace.drawers.filter((drawer) => {
-    const wingMatch = q || state.selectedWing === "all" || drawer.wing === state.selectedWing;
-    const roomMatch = q || state.selectedRoom === "all" || drawer.room === state.selectedRoom;
-    const queryMatch =
-      !q ||
-      [drawer.title, drawer.content, drawer.wing, drawer.room, drawer.source_file, drawer.drawer_id]
-        .map(norm)
-        .some((value) => value.includes(q));
-    return wingMatch && roomMatch && queryMatch;
-  });
-  drawers = drawers.slice();
+  let drawers;
+  if (usingServerSearch) {
+    drawers = Array.isArray(state.searchResults) ? state.searchResults.slice() : [];
+  } else {
+    drawers = state.palace.drawers.filter((drawer) => {
+      const wingMatch = q || state.selectedWing === "all" || drawer.wing === state.selectedWing;
+      const roomMatch = q || state.selectedRoom === "all" || drawer.room === state.selectedRoom;
+      const queryMatch =
+        !q ||
+        [drawer.title, drawer.content, drawer.wing, drawer.room, drawer.source_file, drawer.drawer_id]
+          .map(norm)
+          .some((value) => value.includes(q));
+      return wingMatch && roomMatch && queryMatch;
+    });
+    drawers = drawers.slice();
+  }
   drawers.sort((a, b) => {
     switch (state.sortBy) {
       case "filed-asc": return (a.filed_at || "").localeCompare(b.filed_at || "");
@@ -1221,6 +1267,38 @@ function drawersInRoom(wingName, roomName) {
 
 function drawerById(drawerId) {
   return state.palace.drawers.find((drawer) => drawer.drawer_id === drawerId);
+}
+
+// ---------- lazy body load (large palaces) ----------
+// On a large palace the server ships a LIGHT list — each drawer's body is
+// truncated to a preview and flagged `truncated: true`, and its etag is
+// empty (the real etag hashes the full body). Before any operation that
+// needs the WHOLE body (detail render, edit, diff) we fetch it once from
+// /api/drawer and merge it into the canonical drawer object in place, so
+// every later reference (drawerById returns the same array element) sees
+// the full body + authoritative etag. On a small palace drawers are never
+// `truncated`, so callers gate on that flag and this never runs — the
+// classic in-memory behavior is completely untouched.
+async function ensureFullContent(drawer) {
+  if (!drawer || !drawer.truncated) return drawer;
+  if (drawer._fullLoad) return drawer._fullLoad.then(() => drawer);
+  drawer._fullLoad = (async () => {
+    const resp = await fetchJson(`/api/drawer?id=${encodeURIComponent(drawer.drawer_id)}`);
+    const full = resp && resp.drawer;
+    if (full && typeof full.content === "string") {
+      drawer.content = full.content;
+      drawer.etag = full.etag || "";
+      if (full.title) drawer.title = full.title;
+      drawer.truncated = false;
+    }
+  })();
+  try {
+    await drawer._fullLoad;
+  } catch (err) {
+    // Network blip — leave the preview in place; the next open retries.
+    drawer._fullLoad = null;
+  }
+  return drawer;
 }
 
 // ---------- url hash ----------
@@ -3498,6 +3576,16 @@ function renderDetail() {
     ? state.palace.drawers.find((item) => item.drawer_id === state.selectedDrawerId)
     : null;
   if (drawer) {
+    // Large (light-mode) palace: the body is a truncated preview. Render it
+    // immediately so the panel opens with no perceptible delay, then fetch
+    // the full body in the background and swap it in when it lands.
+    if (drawer.truncated) {
+      ensureFullContent(drawer).then(() => {
+        if (state.selectedDrawerId === drawer.drawer_id && !drawer.truncated) {
+          renderDrawerDetail(drawer, { bodyJustLoaded: true });
+        }
+      });
+    }
     renderDrawerDetail(drawer);
     applyDetailTransition();
     updateGridLayout();
@@ -3531,7 +3619,7 @@ function renderDetail() {
 // set, prepends an iOS-style back button that pops the override and
 // returns to the tunnel inspector with the reverse slide animation.
 function renderDrawerDetail(drawer, opts = {}) {
-  const { backToTunnel } = opts;
+  const { backToTunnel, bodyJustLoaded } = opts;
   // Mark this drawer as seen — covers every code path that shows a
   // drawer to the user (card click, hash deep-link, keyboard nav,
   // tunnel inspector → memory). The "recently updated" marker
@@ -3574,6 +3662,7 @@ function renderDrawerDetail(drawer, opts = {}) {
     && state.editBuffer
     && state.editBuffer.drawerId === drawer.drawer_id;
   const sameDrawerInDom = wasDrawer
+    && !bodyJustLoaded
     && prevDrawer
     && prevDrawer.drawer_id === drawer.drawer_id
     && prevDrawer.content === drawer.content
@@ -3670,7 +3759,9 @@ function renderDrawerDetail(drawer, opts = {}) {
     { label: "Updated", display: updatedDisplay, full: drawer.updated_at, changed: false, recent: true },
     { label: "Location", display: locationDisplay, full: locationDisplay, changed: isNew("wing") || isNew("room"), enlargedOnly: true },
   ].filter((cell) => cell.display);
-  const contentChanged = isNew("content");
+  // bodyJustLoaded: the body was swapped from preview → full text by a
+  // lazy /api/drawer fetch, not edited — don't flash the change highlight.
+  const contentChanged = !bodyJustLoaded && isNew("content");
 
   // (The old per-drawer tunnel-jump icon was removed — the tunnel
   // inspector is the canonical way to reach a tunnel now: click the
@@ -5083,6 +5174,9 @@ function render() {
   // their own handlers, so nothing user-visible is lost.
   const openMenu = document.querySelector(".action-menu:not(.hidden)");
   if (!openMenu) closeMenus();
+  // Large-palace search is server-side; keep results in sync with the query
+  // before rendering the list. No-op on small palaces and when unchanged.
+  maybeRunServerSearch();
   renderStats();
   renderNav();
   renderDrawers();
@@ -5945,6 +6039,17 @@ async function confirmDelete() {
 function enterEditMode(drawerId) {
   const drawer = drawerById(drawerId);
   if (!drawer) return;
+  // Large (light-mode) palace: the list ships a TRUNCATED body and an empty
+  // etag. Editing from that would save the truncated text over the real
+  // memory and fail the etag check — so fetch the full body first, then
+  // re-enter. If the fetch fails the drawer stays `truncated` and we simply
+  // don't open the editor (never edit a partial body).
+  if (drawer.truncated) {
+    ensureFullContent(drawer).then(() => {
+      if (!drawer.truncated) enterEditMode(drawerId);
+    });
+    return;
+  }
   // Interrupt path: the user clicked Edit while a previous cancel /
   // save was still playing its chip-cascade exit. Same drawer?
   // Reverse the cascade in place — chips glide back from wherever
