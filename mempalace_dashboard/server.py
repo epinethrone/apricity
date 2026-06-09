@@ -14,6 +14,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
 from collections import Counter
@@ -25,6 +26,20 @@ from urllib.parse import parse_qs, urlparse
 
 
 SERVER_STARTED_AT = datetime.now()
+
+# ----- large-palace scaling knobs -------------------------------------------
+# /api/palace used to serialize the FULL body of every drawer on every
+# request. That's fine for the typical palace (a few hundred drawers) but
+# collapses at scale: a ~292K-drawer palace produced a ~526 MB JSON blob
+# that took ~24s to build and stalled the browser. So the payload is now
+# ADAPTIVE — below the threshold the response is byte-for-byte identical to
+# the old behavior (full bodies, full etags, client-side search); at or
+# above it the list ships TRUNCATED bodies (first PALACE_PREVIEW_CHARS chars,
+# enough for the card preview + title) plus a `truncated` flag, and the full
+# body is fetched lazily per-drawer via /api/drawer. Both thresholds are env
+# overridable for operators with unusual drawer-size distributions.
+LIGHT_PALACE_THRESHOLD = int(os.environ.get("APRICITY_LIGHT_PALACE_THRESHOLD", "5000"))
+PALACE_PREVIEW_CHARS = int(os.environ.get("APRICITY_PALACE_PREVIEW_CHARS", "280"))
 
 
 ROOT = Path(__file__).resolve().parent
@@ -657,22 +672,69 @@ def _row_dicts(cursor: sqlite3.Cursor) -> list[dict]:
     return [dict(row) for row in cursor.fetchall()]
 
 
-def read_drawers() -> list[dict]:
+def count_drawers() -> int:
+    """Cheap COUNT(*) of drawers — used to decide light vs full payload
+    without materializing every body. Returns 0 if the DB is missing or
+    the schema isn't initialised."""
+    if not PALACE_DB.exists():
+        return 0
+    try:
+        con = sqlite3.connect(PALACE_DB)
+        try:
+            (count,) = con.execute(
+                "select count(*) from embeddings where embedding_id like 'drawer_%'"
+            ).fetchone()
+            return int(count)
+        finally:
+            con.close()
+    except sqlite3.OperationalError:
+        return 0
+
+
+def read_drawers(light: bool = False, ids: list[int] | None = None) -> list[dict]:
+    """Read every drawer.
+
+    When ``light`` is True the body is truncated to PALACE_PREVIEW_CHARS in
+    SQL (so a 292K-drawer palace never materializes ~526 MB of body text),
+    each drawer is flagged ``truncated`` when its body exceeded the preview,
+    and the expensive per-drawer sha256 etag is skipped (edits re-fetch the
+    full body + authoritative etag via /api/drawer). When False the result
+    is identical to the historical full read — full bodies, real etags.
+
+    ``ids`` restricts the read to those numeric embedding ids (used by the
+    light-mode search to materialize only the matched drawers)."""
     if not PALACE_DB.exists():
         return []
+    if ids is not None and not ids:
+        return []
+    # Truncate the body in SQL when light. substr to N+1 so we can tell a body
+    # that's exactly N chars from one that was actually cut.
+    if light:
+        doc_expr = f"substr(em.string_value, 1, {PALACE_PREVIEW_CHARS + 1})"
+    else:
+        doc_expr = "em.string_value"
+    id_filter = ""
+    params: tuple = ()
+    if ids is not None:
+        id_filter = f" and e.id in ({','.join('?' for _ in ids)})"
+        params = tuple(ids)
     try:
         con = sqlite3.connect(PALACE_DB)
         con.row_factory = sqlite3.Row
         rows = _row_dicts(
             con.execute(
-                """
+                f"""
                 select e.id, e.embedding_id, em.key,
-                       coalesce(em.string_value, em.int_value, em.float_value, em.bool_value) as value
+                       case when em.key = 'chroma:document'
+                            then {doc_expr}
+                            else coalesce(em.string_value, em.int_value, em.float_value, em.bool_value)
+                       end as value
                 from embeddings e
                 join embedding_metadata em on em.id = e.id
-                where e.embedding_id like 'drawer_%'
+                where e.embedding_id like 'drawer_%'{id_filter}
                 order by e.id
-                """
+                """,
+                params,
             )
         )
         con.close()
@@ -701,7 +763,12 @@ def read_drawers() -> list[dict]:
         key = row["key"]
         value = row["value"]
         if key == "chroma:document":
-            item["content"] = value or ""
+            body = value or ""
+            if light and len(body) > PALACE_PREVIEW_CHARS:
+                item["content"] = body[:PALACE_PREVIEW_CHARS]
+                item["truncated"] = True
+            else:
+                item["content"] = body
             item["title"] = extract_title(item["content"], item["drawer_id"])
         elif key in item:
             item[key] = value or ""
@@ -709,10 +776,72 @@ def read_drawers() -> list[dict]:
             item["metadata"][key] = value
 
     for item in by_id.values():
-        item["etag"] = content_etag(item.get("content", ""))
+        if light:
+            # The etag hashes the FULL body; we don't have it here. Leave it
+            # empty — the lazy /api/drawer fetch supplies the authoritative
+            # etag before any edit, and update_memory only enforces a
+            # non-empty expected_etag (see its guard).
+            item.setdefault("etag", "")
+            item.setdefault("truncated", item.get("truncated", False))
+        else:
+            item["etag"] = content_etag(item.get("content", ""))
     drawers = list(by_id.values())
     enrich_drawers_with_updated_at(drawers)
     return drawers
+
+
+def read_single_drawer(drawer_id: str) -> dict | None:
+    """Read ONE drawer with its full body + authoritative etag. Backs the
+    /api/drawer lazy-load endpoint used when a large (light-mode) palace
+    ships truncated bodies in the list payload."""
+    if not PALACE_DB.exists() or not drawer_id.startswith("drawer_"):
+        return None
+    try:
+        con = sqlite3.connect(PALACE_DB)
+        con.row_factory = sqlite3.Row
+        rows = _row_dicts(
+            con.execute(
+                """
+                select e.id, e.embedding_id, em.key,
+                       coalesce(em.string_value, em.int_value, em.float_value, em.bool_value) as value
+                from embeddings e
+                join embedding_metadata em on em.id = e.id
+                where e.embedding_id = ?
+                """,
+                (drawer_id,),
+            )
+        )
+        con.close()
+    except sqlite3.OperationalError:
+        return None
+    if not rows:
+        return None
+    item = {
+        "id": rows[0]["id"],
+        "drawer_id": drawer_id,
+        "wing": "unknown",
+        "room": "unknown",
+        "title": "Untitled",
+        "content": "",
+        "source_file": "",
+        "filed_at": "",
+        "added_by": "",
+        "truncated": False,
+        "metadata": {},
+    }
+    for row in rows:
+        key = row["key"]
+        value = row["value"]
+        if key == "chroma:document":
+            item["content"] = value or ""
+            item["title"] = extract_title(item["content"], item["drawer_id"])
+        elif key in item:
+            item[key] = value or ""
+        else:
+            item["metadata"][key] = value
+    item["etag"] = content_etag(item.get("content", ""))
+    enrich_drawers_with_updated_at([item])
+    return item
 
 
 # ----- updated_at log cache -----
@@ -1288,7 +1417,13 @@ def read_triples() -> list[dict]:
 
 
 def build_payload() -> dict:
-    drawers = read_drawers()
+    # Adaptive: a small palace ships full bodies (identical to the historical
+    # behavior — client-side search, no lazy loading); a large one ships a
+    # light list (truncated bodies + `truncated` flags) so the response stays
+    # small enough to build, transfer, and parse. The client switches on the
+    # `lightMode` flag below.
+    light = count_drawers() > LIGHT_PALACE_THRESHOLD
+    drawers = read_drawers(light=light)
     triples = read_triples()
     fact_events = sync_fact_events(triples)
     version = palace_version_token()
@@ -1321,6 +1456,11 @@ def build_payload() -> dict:
         "triples": triples,
         "fact_events": fact_events,
         "version": version,
+        # True when bodies were truncated and must be lazily fetched per-drawer
+        # via /api/drawer (and search must go server-side via /api/search).
+        # False → drawers carry full bodies, client behaves exactly as before.
+        "lightMode": light,
+        "previewChars": PALACE_PREVIEW_CHARS,
         # Shared seen-state map — piggy-backs on the palace response so
         # every poll picks up notification-dismissal events from any
         # browser/device on the LAN without an extra round trip. Empty
@@ -1329,27 +1469,114 @@ def build_payload() -> dict:
     }
 
 
+# ----- /api/palace response cache -------------------------------------------
+# build_payload() is the single most expensive thing the server does (a full
+# palace read + serialize). It's also read-mostly: the inputs only change when
+# a drawer/fact/seen-marker is written, and palace_version_token() is a cheap
+# fingerprint (a handful of stat()s) over exactly those inputs. So we cache the
+# serialized JSON + a gzip(level=1) copy keyed on that token. A steady-state
+# poll then costs one palace_version_token() and a dict lookup — the ~24s warm
+# rebuild a large palace used to pay on every request drops to ~0. The rebuild
+# is guarded by a lock so a burst of concurrent requests (ThreadingHTTPServer)
+# rebuilds once, not N times.
+_PALACE_CACHE: dict = {"token": None, "json": None, "gzip": None}
+_PALACE_CACHE_LOCK = threading.Lock()
+
+
+def palace_response_bytes() -> tuple[bytes, bytes | None, str]:
+    """Return (json_bytes, gzip_bytes_or_None, token) for /api/palace,
+    rebuilding only when the palace version token changes."""
+    token = palace_version_token()
+    cache = _PALACE_CACHE
+    if cache["token"] == token and cache["json"] is not None:
+        return cache["json"], cache["gzip"], token
+    with _PALACE_CACHE_LOCK:
+        # Re-check under the lock — another thread may have just rebuilt it.
+        if cache["token"] == token and cache["json"] is not None:
+            return cache["json"], cache["gzip"], token
+        payload = build_payload()
+        # Key the cache on the token embedded in the payload so the cached
+        # bytes always agree with their own version field even if a write
+        # landed mid-build.
+        token = payload.get("version", token)
+        raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        try:
+            # level 1: at ~100 MB the difference between level 1 and 6 is a few
+            # seconds of CPU for a small size win the LAN doesn't care about.
+            gz = gzip.compress(raw, compresslevel=1)
+        except OSError:
+            gz = None
+        cache["token"] = token
+        cache["json"] = raw
+        cache["gzip"] = gz
+        return raw, gz, token
+
+
+def _search_drawer_ids(q: str, limit: int = 2000) -> list[int]:
+    """Push the body/metadata substring match into SQLite so a light-mode
+    search never materializes the whole palace. Matches the full document
+    body (which also covers the title, since titles are the body's first
+    heading), wing/room/source_file metadata, and the drawer_id. Case-
+    insensitive; capped at ``limit`` matches to bound the payload."""
+    if not PALACE_DB.exists():
+        return []
+    like = f"%{q}%"
+    try:
+        con = sqlite3.connect(PALACE_DB)
+        rows = con.execute(
+            """
+            select distinct e.id
+            from embeddings e
+            join embedding_metadata em on em.id = e.id
+            where e.embedding_id like 'drawer_%'
+              and (
+                (em.key = 'chroma:document' and em.string_value like ? collate nocase)
+                or (em.key in ('wing', 'room', 'source_file') and em.string_value like ? collate nocase)
+                or e.embedding_id like ? collate nocase
+              )
+            order by e.id desc
+            limit ?
+            """,
+            (like, like, like, limit),
+        ).fetchall()
+        con.close()
+        return [r[0] for r in rows]
+    except sqlite3.OperationalError:
+        return []
+
+
 def search_payload(query: str) -> dict:
     q = query.strip().lower()
-    drawers = read_drawers()
     triples = read_triples()
-    if not q:
-        return {"drawers": drawers, "triples": triples}
 
     def hit(*values: object) -> bool:
         return any(q in str(value or "").lower() for value in values)
 
+    matched_triples = (
+        triples
+        if not q
+        else [t for t in triples if hit(t["subject"], t["predicate"], t["object"], t["source_drawer_id"])]
+    )
+
+    # Light-mode search: filter in SQL and materialize only the matched
+    # drawers (truncated, like the list payload — the client lazy-loads full
+    # bodies on open). Small palaces keep the original in-Python full filter.
+    if count_drawers() > LIGHT_PALACE_THRESHOLD:
+        if not q:
+            return {"drawers": read_drawers(light=True), "triples": matched_triples, "lightMode": True}
+        ids = _search_drawer_ids(q)
+        return {"drawers": read_drawers(light=True, ids=ids), "triples": matched_triples, "lightMode": True}
+
+    drawers = read_drawers()
+    if not q:
+        return {"drawers": drawers, "triples": triples}
     return {
         "drawers": [
             d
             for d in drawers
             if hit(d["title"], d["content"], d["wing"], d["room"], d["source_file"], d["drawer_id"])
         ],
-        "triples": [
-            t
-            for t in triples
-            if hit(t["subject"], t["predicate"], t["object"], t["source_drawer_id"])
-        ],
+        "triples": matched_triples,
     }
 
 
@@ -2777,6 +3004,24 @@ class Handler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def respond_palace(self) -> None:
+        """Serve /api/palace from the version-keyed cache, writing the
+        pre-serialized (and pre-gzipped) bytes directly so a steady-state
+        poll does no json.dumps/gzip work at all."""
+        raw, gz, _token = palace_response_bytes()
+        if gz is not None and self._accepts_gzip():
+            body, gzipped = gz, True
+        else:
+            body, gzipped = raw, False
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        if gzipped:
+            self.send_header("Content-Encoding", "gzip")
+            self.send_header("Vary", "Accept-Encoding")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def _read_session_id(self) -> str:
         raw = self.headers.get("Cookie") or ""
         if not raw:
@@ -2836,10 +3081,21 @@ class Handler(SimpleHTTPRequestHandler):
             if not self._enforce_auth():
                 return
             if parsed.path == "/api/palace":
-                self.respond_json(build_payload())
+                self.respond_palace()
                 return
             if parsed.path == "/api/palace-version":
                 self.respond_json({"version": palace_version_token()})
+                return
+            if parsed.path == "/api/drawer":
+                drawer_id = parse_qs(parsed.query).get("id", [""])[0]
+                if not drawer_id.startswith("drawer_"):
+                    self.respond_json({"success": False, "error": "Invalid drawer id."}, status=400)
+                    return
+                drawer = read_single_drawer(drawer_id)
+                if drawer is None:
+                    self.respond_json({"success": False, "error": "Drawer not found."}, status=404)
+                    return
+                self.respond_json({"drawer": drawer})
                 return
             if parsed.path == "/api/search":
                 query = parse_qs(parsed.query).get("q", [""])[0]
