@@ -201,17 +201,21 @@ body {
   color: var(--text);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) body {
-    background: var(--bg);
-  }
-}
+/* No per-theme body overrides: the base rule's var(--bg) already
+   resolves per theme. The forced-dark path used to keep a stale
+   radial+linear gradient that Auto-dark had dropped, so Forced Dark
+   and Auto-on-dark-OS rendered different page backgrounds. */
 
-:root[data-theme="dark"] body {
-    background:
-      radial-gradient(circle at top left, rgba(63, 148, 186, 0.18), transparent 34rem),
-      linear-gradient(180deg, #1c1c1e 0%, var(--bg) 100%);
-  }
+/* Forced themes must steer NATIVE widget rendering too (scrollbars,
+   <select> popups, form controls). :root's `color-scheme: light dark`
+   alone lets the OS decide — a forced-Light user on a dark OS got
+   dark scrollbars and dropdowns, and vice versa. */
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}
 
 button,
 input,
@@ -2754,6 +2758,10 @@ select:focus {
 .detail {
   scrollbar-width: none;          /* Firefox */
   -ms-overflow-style: none;       /* legacy Edge / IE */
+  /* Don't chain a finished scroll to the page behind — on mobile the
+     full-screen detail layer otherwise scrolls the stacked list under
+     it, so closing a memory landed on a randomly shifted page. */
+  overscroll-behavior: contain;
 }
 .room-nav::-webkit-scrollbar,
 .drawer-list::-webkit-scrollbar,
@@ -3541,6 +3549,16 @@ body.apricity-panel-controls-always .detail-panel-actions {
   background: var(--surface-strong);
   color: var(--text);
   border-color: rgba(0, 0, 0, 0.18);
+}
+/* Dark: the black-alpha hover border is invisible on a dark surface —
+   the border appeared to VANISH on hover instead of strengthening. */
+:root[data-theme="dark"] .content-grid.detail-editing .detail-panel-delete:hover {
+  border-color: rgba(255, 255, 255, 0.26);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .content-grid.detail-editing .detail-panel-delete:hover {
+    border-color: rgba(255, 255, 255, 0.26);
+  }
 }
 
 /* One-shot check draw animation. Total path length is ~21 units,
@@ -8063,6 +8081,20 @@ input.invalid-mismatch {
   background: rgba(176, 0, 32, 0.12);
   color: #b00020;
 }
+/* Dark: #b00020 crimson is near-illegible on dark surfaces — lift to
+   the palette's light-red on both dark paths. */
+:root[data-theme="dark"] .lab-error,
+:root[data-theme="dark"] .lab-pill-warn {
+  color: #ff8a8d;
+  background: rgba(254, 95, 99, 0.16);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .lab-error,
+  :root:not([data-theme="light"]) .lab-pill-warn {
+    color: #ff8a8d;
+    background: rgba(254, 95, 99, 0.16);
+  }
+}
 
 .lab-timeline-row {
   grid-template-columns: 110px 1fr;
@@ -9935,7 +9967,7 @@ a.settings-action-row,
    and iOS-style motion, but stops inheriting the desktop three-pane model.
    Browse becomes: sticky top chrome -> horizontal scope shelf -> primary
    memories viewport -> full-screen detail drill-in. */
-@media (max-width: 768px) {
+@media (max-width: 980px) {
   .topbar {
     position: sticky;
     top: 0;
@@ -10630,7 +10662,7 @@ a.settings-action-row,
   color: var(--accent);
 }
 
-@media (max-width: 768px) {
+@media (max-width: 980px) {
   .mobile-actions-wrap {
     display: grid;
   }
@@ -10735,7 +10767,7 @@ a.settings-action-row,
 
 /* Mobile modal/sheet polish: every overlay should sit above the full-screen
    detail drill-in, open inside the viewport, and keep its own scroll state. */
-@media (max-width: 768px) {
+@media (max-width: 980px) {
   body:has(.write-sheet:not(.hidden)),
   body:has(.edit-sheet:not(.hidden)),
   body:has(.confirm-sheet:not(.hidden)),
@@ -11037,7 +11069,7 @@ a.settings-action-row,
 
 /* ===== MOBILE-FIRST POLISH: bottom-sheet menus + chip scroll affordances =====
    Appended last so these win over the earlier mobile rules. */
-@media (max-width: 768px) {
+@media (max-width: 980px) {
   /* Grab handle on every bottom-sheet panel (write/edit/drafts/trash/fact/
      tools all share .write-header, which is already position:sticky). */
   .write-header {
@@ -11143,7 +11175,7 @@ a.settings-action-row,
 }
 
 /* ===== MOBILE REAL-DEVICE FIXES (round 2) ===== */
-@media (max-width: 768px) {
+@media (max-width: 980px) {
   /* Rooms-view gap: the back-bar + wing-header were flex:0 0 100% inside the
      horizontal chip scroller, so each ate a full screen-width before the room
      chips. Make them content-width so the chips follow immediately, and pin
@@ -11200,7 +11232,7 @@ a.settings-action-row,
 /* Mobile search, apple-grade. Collapsed: a clean circular icon button that
    matches the bell/menu exactly (no rotating glow ring, no rounded-square, no
    heavy border). Tapped: a full-width clean field on its own row. */
-@media (max-width: 768px) {
+@media (max-width: 980px) {
   .topbar-inner {
     flex-wrap: wrap;
     position: relative;
@@ -11293,7 +11325,7 @@ a.settings-action-row,
 
 /* KG / Tools fact list: roomier touch cards, clearer subject→predicate→object
    (predicate tinted), and a taller results area inside the Tools bottom sheet. */
-@media (max-width: 768px) {
+@media (max-width: 980px) {
   .lab-output {
     max-height: 56dvh;
     padding: 8px;
@@ -11318,5 +11350,78 @@ a.settings-action-row,
     color: var(--accent);
     font-weight: 600;
     font-size: 12px;
+  }
+}
+
+/* ===== Mobile audit wave 1 (appended) =====
+   Companion fixes to the ≤980px app-layout overhaul above. */
+@media (max-width: 980px) {
+  /* iOS Safari auto-zooms the whole page when a focused field is under
+     16px. Pin every focusable text surface to 16px on touch layouts so
+     focusing search/login/chips/the editor never reflows the app. */
+  .search input,
+  .login-form input[type="text"],
+  .login-form input[type="password"],
+  .login-form input:not([type]),
+  .detail-editor-chip input,
+  .markdown-editing {
+    font-size: 16px;
+  }
+  /* The full-screen detail layer is opaque (background: var(--bg)), so
+     .panel's backdrop-filter is pure GPU cost there — and it creates a
+     containing block that traps position:fixed descendants on phones. */
+  .content-grid > .detail-panel {
+    backdrop-filter: none;
+    overscroll-behavior: none;
+  }
+  /* Lift the floating Save/Cancel/Retry above the on-screen keyboard.
+     --kb-inset is maintained from visualViewport in app.js (0 on
+     desktop and whenever the keyboard is closed). */
+  .detail-panel-edit,
+  .detail-panel-delete,
+  .detail-panel-retry {
+    bottom: calc(18px + env(safe-area-inset-bottom) + var(--kb-inset, 0px));
+  }
+  /* detail-enlarged persists from desktop (and F toggles it), and its
+     side-column edit-grid rules outrank the mobile block's bare
+     .detail-edit-grid/.detail-editor-chips selectors — so entering edit
+     mode on a phone laid the toolbar out in a grid gutter that is
+     off-screen left at narrow widths. Neutralize the enlarged grid at
+     mobile widths with matching-or-higher specificity. */
+  .content-grid.detail-enlarged .detail-edit-grid {
+    display: block;
+  }
+  .content-grid.detail-enlarged .detail-edit-grid .detail-editor-chips {
+    position: static;
+    top: auto;
+    justify-self: auto;
+    align-self: auto;
+    margin: 0;
+    width: auto;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    overflow-x: auto;
+    overflow-y: visible;
+  }
+  .content-grid.detail-enlarged .detail-edit-grid .detail-editor-chip {
+    width: auto;
+    flex: 0 0 auto;
+  }
+  .content-grid.detail-enlarged .detail-edit-grid .detail-editor-tool-group {
+    display: inline-flex;
+    flex-direction: row;
+    width: auto;
+    margin: 0;
+    flex: 0 0 auto;
+  }
+  .content-grid.detail-enlarged .detail-edit-grid .detail-editor-toolbar-sep {
+    width: 1px;
+    height: 28px;
+    margin: 0 2px;
+    flex: 0 0 1px;
+    align-self: stretch;
   }
 }

@@ -2,7 +2,12 @@
 <html lang="en" class="page-loading">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- viewport-fit=cover: without it env(safe-area-inset-*) is 0 on
+         notched iPhones and every safe-area pad in the mobile CSS is
+         inert. interactive-widget=resizes-content: Chrome/Android
+         shrinks the layout viewport when the keyboard opens, so
+         bottom-anchored Save/Cancel rise above it natively. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
     <!-- CRITICAL inline script — runs SYNCHRONOUSLY before the body is
          parsed or painted, so JS-restored layout state is in place for
          the very FIRST paint. This eliminates the reload layout-shift
@@ -94,7 +99,7 @@
     />
     <meta name="twitter:image" content="/apricity-logo.png" />
 
-    <link rel="stylesheet" href="/styles.css?v=376" />
+    <link rel="stylesheet" href="/styles.css?v=377" />
   </head>
   <body>
     <div class="shell">
@@ -1604,7 +1609,7 @@
          app.js. Order is preserved (app.js before lab.js) and all
          event handlers attach inside the scripts, so deferring is
          safe. Shaves the JS-execution stall off the first paint. -->
-    <script src="/app.js?v=301" defer></script>
+    <script src="/app.js?v=307" defer></script>
     <script src="/lab.js?v=4" defer></script>
   </body>
 </html>
