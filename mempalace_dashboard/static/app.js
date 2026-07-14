@@ -1819,8 +1819,18 @@ function reconcileSelection() {
       let moved = null;
       if (sig && sig.filed_at) {
         const sameTime = drawers.filter((d) => d.filed_at === sig.filed_at);
+        // Primary: same filed_at + same title (MCP re-embed under a new
+        // id). Fallback covers a title EDIT (same filed_at, new title,
+        // new id) — but only when the single candidate also shares the
+        // wing/room. Without that check, deleting the open drawer while
+        // an unrelated drawer happened to share its filed_at (bulk
+        // imports stamp identical timestamps) silently re-pointed the
+        // panel at that unrelated memory instead of closing.
         moved = sameTime.find((d) => d.title === sig.title)
-          || (sameTime.length === 1 ? sameTime[0] : null);
+          || (sameTime.length === 1
+              && sameTime[0].wing === sig.wing
+              && sameTime[0].room === sig.room
+              ? sameTime[0] : null);
       }
       if (moved) {
         state.selectedDrawerId = moved.drawer_id;
@@ -3595,7 +3605,14 @@ function renderDetail() {
     updateGridLayout();
     return;
   }
-  if (!state.detailDismissed && state.selectedRoom && state.selectedRoom !== "all") {
+  // Desktop-only auto-open: merely SELECTING a room that happens to
+  // have tunnels must not commandeer a phone/tablet screen — at ≤980px
+  // the detail panel is a full-screen slide-in takeover, so this
+  // implicit branch hijacked the whole display on a simple room tap.
+  // On small screens the tunnel inspector opens only via an explicit
+  // tap on a tunnel entry (the detailOverride path above).
+  if (!state.detailDismissed && state.selectedRoom && state.selectedRoom !== "all"
+      && !(window.matchMedia && window.matchMedia("(max-width: 980px)").matches)) {
     const entries = state.selectedWing === "all"
       ? tunnelsForRoomAcrossWings(state.selectedRoom)
       : tunnelsForRoom(state.selectedWing, state.selectedRoom);
@@ -5672,8 +5689,10 @@ function setWriteSheetMode(mode, draft = null) {
 }
 
 function isMobileSheetViewport() {
+  // 980 matches the CSS mobile-overhaul breakpoint (the full-screen
+  // detail overlay + stacked layout) — keep the two in lockstep.
   return window.matchMedia
-    && (window.matchMedia("(max-width: 768px)").matches
+    && (window.matchMedia("(max-width: 980px)").matches
       || window.matchMedia("(pointer: coarse)").matches);
 }
 
@@ -9028,6 +9047,11 @@ document.addEventListener("keydown", (event) => {
       || target.isContentEditable
     );
     if (isTyping) return;
+    // Modifier chords are never the delete shortcut — Cmd/Ctrl/Alt +
+    // Backspace are text-editing/browser chords. The other shortcuts
+    // (edit/maximize/close) guard with the same !isMod check; without
+    // it Cmd+Backspace opened the destructive delete sheet.
+    if (event.metaKey || event.ctrlKey || event.altKey) return;
     // Suppress the delete shortcut while inline-edit mode is active —
     // the user is editing a memory, not navigating; a stray Backspace
     // outside the textarea (e.g. focus on the panel chrome) should
@@ -11016,3 +11040,23 @@ document.addEventListener("visibilitychange", () => {
   // refresh. See startNotificationPolling for cadence + gating.
   startNotificationPolling();
 })();
+
+// Keyboard-aware bottom inset for mobile edit mode. The full-screen
+// detail layer is 100dvh and position:fixed — when the on-screen
+// keyboard opens, the VISUAL viewport shrinks but the layout viewport
+// (and dvh) does not, so the bottom-anchored Save/Cancel buttons end
+// up behind the keyboard with no way to commit an edit. Track the
+// visual-viewport gap as --kb-inset; the ≤980px CSS adds it to the
+// buttons' bottom offset. The >60px floor ignores URL-bar collapse
+// noise so desktop and keyboard-closed states stay at 0.
+if (window.visualViewport) {
+  const vv = window.visualViewport;
+  const updateKbInset = () => {
+    const gap = Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop));
+    document.documentElement.style.setProperty(
+      "--kb-inset", gap > 60 ? gap + "px" : "0px"
+    );
+  };
+  vv.addEventListener("resize", updateKbInset);
+  vv.addEventListener("scroll", updateKbInset);
+}
