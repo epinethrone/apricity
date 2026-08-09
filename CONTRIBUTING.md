@@ -56,7 +56,13 @@ If you add a new API route, please:
 
 ## Development loop
 
-There is no test suite yet — verification is manual. For most changes:
+Run the stdlib regression suite first, then exercise the affected path manually:
+
+```bash
+python -m unittest discover -s tests
+```
+
+For most changes:
 
 1. Start a scratch MemPalace install (or point env vars at a copy you're willing to lose).
 2. Run `python3 server.py`.
@@ -64,7 +70,7 @@ There is no test suite yet — verification is manual. For most changes:
 4. Check that snapshots/recovery still work for any destructive action you touched.
 5. Try the affected endpoint with `curl` to confirm it behaves correctly under direct API use.
 
-If you write a test harness, please put it under `tests/` and keep it stdlib-only (`unittest` is fine).
+Put new coverage under `tests/` and keep it stdlib-only (`unittest` is preferred).
 
 ## Code conventions
 

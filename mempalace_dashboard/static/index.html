@@ -33,29 +33,7 @@
          (300px / 480px) + @media palette apply, i.e. the pre-existing
          behaviour. app.js's applyTheme() re-applies the same attribute
          idempotently. -->
-    <script>
-      (function () {
-        try {
-          var panes = { "--rooms-w": [200, 600, 300], "--drawers-w": [280, 900, 480] };
-          for (var v in panes) {
-            var b = panes[v], px = b[2];
-            var raw = localStorage.getItem("mempalace-pane" + v);
-            var n = raw == null ? NaN : parseInt(raw, 10);
-            if (isFinite(n)) px = Math.min(b[1], Math.max(b[0], n));
-            document.documentElement.style.setProperty(v, px + "px");
-          }
-        } catch (e) {}
-        try {
-          // Mirror applyTheme()'s resolution EXACTLY: explicit
-          // "light"/"dark" → set data-theme; "auto" or unset → leave it
-          // off so the CSS @media query drives the palette.
-          var mode = localStorage.getItem("mempalace-theme");
-          if (mode === "light" || mode === "dark") {
-            document.documentElement.dataset.theme = mode;
-          }
-        } catch (e) {}
-      })();
-    </script>
+    <script src="/prepaint.js?v=1"></script>
     <title>Apricity — MemPalace Companion</title>
     <meta
       name="description"
@@ -1254,6 +1232,13 @@
                 </div>
                 <input id="settingsUsername" class="settings-input-control" required maxlength="64" autocomplete="username" />
               </div>
+              <div class="settings-card-divider hidden" data-setup-divider></div>
+              <div class="settings-card-row settings-card-row-input hidden" id="settingsSetupRow">
+                <div class="settings-card-row-text">
+                  <strong>Setup secret</strong>
+                </div>
+                <input id="settingsSetupToken" class="settings-input-control" type="password" autocomplete="off" />
+              </div>
               <div class="settings-card-divider" data-current-divider></div>
               <div class="settings-card-row settings-card-row-input hidden" id="settingsCurrentRow">
                 <div class="settings-card-row-text">
@@ -1609,7 +1594,7 @@
          app.js. Order is preserved (app.js before lab.js) and all
          event handlers attach inside the scripts, so deferring is
          safe. Shaves the JS-execution stall off the first paint. -->
-    <script src="/app.js?v=307" defer></script>
+    <script src="/app.js?v=308" defer></script>
     <script src="/lab.js?v=4" defer></script>
   </body>
 </html>

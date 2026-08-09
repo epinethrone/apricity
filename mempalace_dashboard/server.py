@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import argparse
 import base64
 import gzip
 import hashlib
 import importlib.metadata
+import ipaddress
 import json
 import os
 import platform
@@ -119,6 +121,23 @@ def _env_path(var: str, default: Path) -> Path:
     raw = os.environ.get(var)
     return Path(raw).expanduser() if raw else default
 
+
+def _env_flag(var: str, default: bool = False) -> bool:
+    raw = os.environ.get(var)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_paths(var: str) -> tuple[Path, ...]:
+    raw = os.environ.get(var, "")
+    roots: list[Path] = []
+    for value in raw.split(os.pathsep):
+        value = value.strip()
+        if value:
+            roots.append(Path(value).expanduser().resolve())
+    return tuple(roots)
+
 MEMPALACE_HOME = _env_path("MEMPALACE_HOME", Path.home() / ".mempalace")
 PALACE_DB = _env_path("MEMPALACE_PALACE_DB", MEMPALACE_HOME / "palace" / "chroma.sqlite3")
 KG_DB = _env_path("MEMPALACE_KG_DB", MEMPALACE_HOME / "knowledge_graph.sqlite3")
@@ -135,11 +154,10 @@ MP_WAL_LOG = _env_path("MEMPALACE_WAL_LOG", MEMPALACE_HOME / "wal" / "write_log.
 # One-line-per-restore ledger. When the dashboard restores a deleted
 # drawer it calls tool_add_drawer, which appends an `add_drawer` entry
 # to the MP WAL with the current timestamp — so the WAL-derived
-# updated_at for the restored drawer is the restore time, not its
-# original last-edit time. We preserve the original filed_at via direct
-# SQL (see restore_version) but had no way to override the WAL-derived
-# updated_at, which made the bell pulse + "Updated · just now" badge
-# fire on every restore as if someone had just edited the memory.
+# updated_at for the restored drawer is the restore time. Restores now
+# intentionally receive a fresh filed_at through the public MemPalace
+# write API; the ledger identifies them as recovery actions rather than
+# unrelated edits so notification handling remains consistent.
 # Recording the new drawer_id here lets enrich_drawers_with_updated_at
 # clamp updated_at = filed_at for restored drawers, which is honest:
 # nothing was edited, just recovered. Plain text so it survives a
@@ -167,6 +185,7 @@ TUNNELS_FILE = _env_path("MEMPALACE_TUNNELS", MEMPALACE_HOME / "tunnels.json")
 CREDENTIALS_FILE = _env_path("MEMPALACE_CREDENTIALS", MEMPALACE_HOME / "dashboard-credentials.json")
 SESSIONS_FILE = _env_path("MEMPALACE_SESSIONS", MEMPALACE_HOME / "dashboard-sessions.json")
 PREFERENCES_FILE = _env_path("MEMPALACE_PREFERENCES", MEMPALACE_HOME / "dashboard-preferences.json")
+SYNC_ROOTS = _env_paths("MEMPALACE_SYNC_ROOTS")
 
 # ---------- version tracking ----------
 # Source of truth for the displayed version is the INSTALLED package
@@ -187,6 +206,7 @@ _GITHUB_LATEST_BACKOFF = 60  # On failure, wait this long before retrying
 _GITHUB_LATEST_URL = (
     "https://api.github.com/repos/epinethrone/apricity/releases/latest"
 )
+UPDATE_CHECK_ENABLED = not _env_flag("APRICITY_DISABLE_UPDATE_CHECK")
 
 
 def get_installed_version() -> str:
@@ -215,6 +235,8 @@ def get_latest_github_version() -> str | None:
     rate-limit, no releases yet, repo renamed), returns whatever
     previous value we have — possibly None — and sets a short
     backoff so we don't hammer GitHub on the next request."""
+    if not UPDATE_CHECK_ENABLED:
+        return None
     now = time.time()
     cached_age = now - _GITHUB_LATEST_CACHE["fetched_at"]
     if _GITHUB_LATEST_CACHE["version"] is not None and cached_age < _GITHUB_LATEST_TTL:
@@ -261,6 +283,13 @@ NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 TUNNEL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.\-]{0,127}$")
 USERNAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.@-]{0,62}$")
 AUTH_TOKEN = os.environ.get("MEMPALACE_TOKEN", "").strip()
+SETUP_TOKEN = os.environ.get("MEMPALACE_SETUP_TOKEN", "").strip() or secrets.token_urlsafe(32)
+COOKIE_SECURE = _env_flag("MEMPALACE_COOKIE_SECURE")
+LOGIN_MAX_FAILURES = 5
+LOGIN_WINDOW_SECONDS = 300
+LOGIN_LOCK_SECONDS = 60
+_LOGIN_FAILURES: dict[str, list[float]] = {}
+_LOGIN_FAILURES_LOCK = threading.Lock()
 
 
 def load_sessions() -> dict:
@@ -305,33 +334,42 @@ def _safe_iso(value):
         return None
 
 
-def create_session(username: str, remember: bool) -> tuple[str, datetime]:
+def create_session(username: str, remember: bool) -> tuple[str, datetime, str]:
     sessions = prune_sessions(load_sessions())
     sid = secrets.token_urlsafe(32)
+    csrf_token = secrets.token_urlsafe(32)
     duration = SESSION_DURATION_LONG if remember else SESSION_DURATION_SHORT
     expires = datetime.now() + duration
     sessions[sid] = {
         "username": username,
         "expires_at": expires.isoformat(timespec="seconds"),
         "remember": bool(remember),
+        "csrf_token": csrf_token,
     }
     save_sessions(sessions)
-    return sid, expires
+    return sid, expires, csrf_token
 
 
-def validate_session(sid: str) -> str | None:
+def validated_session(sid: str) -> dict | None:
     if not sid:
         return None
     sessions = load_sessions()
     record = sessions.get(sid)
-    if not record:
+    if not isinstance(record, dict):
         return None
     expires = _safe_iso(record.get("expires_at"))
     if not expires or expires <= datetime.now():
         sessions.pop(sid, None)
         save_sessions(sessions)
         return None
-    return record.get("username")
+    if not record.get("username") or not record.get("csrf_token"):
+        return None
+    return record
+
+
+def validate_session(sid: str) -> str | None:
+    record = validated_session(sid)
+    return record.get("username") if record else None
 
 
 def delete_session(sid: str) -> None:
@@ -343,15 +381,20 @@ def delete_session(sid: str) -> None:
         save_sessions(sessions)
 
 
-def session_cookie_header(sid: str, remember: bool) -> str:
+def session_cookie_header(sid: str, remember: bool, *, secure: bool | None = None) -> str:
     parts = [f"{SESSION_COOKIE}={sid}", "Path=/", "HttpOnly", "SameSite=Lax"]
+    if COOKIE_SECURE if secure is None else secure:
+        parts.append("Secure")
     if remember:
         parts.append(f"Max-Age={int(SESSION_DURATION_LONG.total_seconds())}")
     return "; ".join(parts)
 
 
-def clear_session_cookie_header() -> str:
-    return f"{SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0"
+def clear_session_cookie_header(*, secure: bool | None = None) -> str:
+    parts = [f"{SESSION_COOKIE}=", "Path=/", "HttpOnly", "SameSite=Lax", "Max-Age=0"]
+    if COOKIE_SECURE if secure is None else secure:
+        parts.append("Secure")
+    return "; ".join(parts)
 
 
 def hash_password(password: str) -> str:
@@ -375,13 +418,27 @@ def verify_password(password: str, stored: str) -> bool:
     return secrets.compare_digest(expected, actual)
 
 
-def load_credentials() -> dict | None:
+def credential_state() -> tuple[str, dict | None]:
     if not CREDENTIALS_FILE.exists():
-        return None
+        return "missing", None
     try:
-        return json.loads(CREDENTIALS_FILE.read_text(encoding="utf-8"))
+        payload = json.loads(CREDENTIALS_FILE.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
-        return None
+        return "invalid", None
+    if not isinstance(payload, dict):
+        return "invalid", None
+    username = payload.get("username")
+    password_hash = payload.get("password_hash")
+    if not isinstance(username, str) or not USERNAME_RE.match(username):
+        return "invalid", None
+    if not isinstance(password_hash, str) or not password_hash.startswith("pbkdf2_sha256$"):
+        return "invalid", None
+    return "valid", payload
+
+
+def load_credentials() -> dict | None:
+    state, payload = credential_state()
+    return payload if state == "valid" else None
 
 
 def save_credentials(username: str, password_hash: str) -> None:
@@ -400,10 +457,50 @@ def save_credentials(username: str, password_hash: str) -> None:
 
 
 def get_settings_status() -> dict:
-    creds = load_credentials()
+    state, creds = credential_state()
     if not creds:
-        return {"credentials_configured": False, "username": None}
-    return {"credentials_configured": True, "username": creds.get("username")}
+        return {
+            "credentials_configured": False,
+            "credential_state": state,
+            "username": None,
+        }
+    return {
+        "credentials_configured": True,
+        "credential_state": state,
+        "username": creds.get("username"),
+    }
+
+
+def record_login_failure(address: str, *, now: float | None = None) -> None:
+    current = time.monotonic() if now is None else now
+    cutoff = current - LOGIN_WINDOW_SECONDS
+    with _LOGIN_FAILURES_LOCK:
+        failures = [stamp for stamp in _LOGIN_FAILURES.get(address, []) if stamp >= cutoff]
+        failures.append(current)
+        _LOGIN_FAILURES[address] = failures
+
+
+def clear_login_failures(address: str) -> None:
+    with _LOGIN_FAILURES_LOCK:
+        _LOGIN_FAILURES.pop(address, None)
+
+
+def login_retry_after(address: str, *, now: float | None = None) -> int:
+    current = time.monotonic() if now is None else now
+    cutoff = current - LOGIN_WINDOW_SECONDS
+    with _LOGIN_FAILURES_LOCK:
+        failures = [stamp for stamp in _LOGIN_FAILURES.get(address, []) if stamp >= cutoff]
+        if failures:
+            _LOGIN_FAILURES[address] = failures
+        else:
+            _LOGIN_FAILURES.pop(address, None)
+        if len(failures) < LOGIN_MAX_FAILURES:
+            return 0
+        remaining = LOGIN_LOCK_SECONDS - (current - failures[-1])
+        if remaining <= 0:
+            _LOGIN_FAILURES.pop(address, None)
+            return 0
+        return max(1, int(remaining + 0.999))
 
 
 def _file_size(path: Path) -> int:
@@ -600,7 +697,12 @@ def get_system_info() -> dict:
     }
 
 
-def update_credentials(payload: dict) -> dict:
+def update_credentials(
+    payload: dict,
+    *,
+    authenticated: bool = False,
+    setup_token: str = "",
+) -> dict:
     username = str(payload.get("username", "")).strip()
     password = str(payload.get("password", ""))
     if not USERNAME_RE.match(username):
@@ -610,20 +712,28 @@ def update_credentials(payload: dict) -> dict:
     if len(password) > 256:
         raise ValueError("Password must be 256 characters or fewer.")
 
-    existing = load_credentials()
+    state, existing = credential_state()
+    if state == "invalid":
+        raise RuntimeError(
+            "The credentials file is unreadable or malformed. Repair or remove it locally before enrollment."
+        )
+    if state == "missing" and not authenticated:
+        if not setup_token or not secrets.compare_digest(setup_token, SETUP_TOKEN):
+            raise PermissionError("A valid first-run setup secret is required.")
     if existing and existing.get("password_hash"):
         current = str(payload.get("current_password", ""))
         if not current or not verify_password(current, existing["password_hash"]):
             raise ValueError("Current password is incorrect.")
 
     save_credentials(username, hash_password(password))
-    sid, expires = create_session(username, remember=False)
+    sid, expires, csrf_token = create_session(username, remember=False)
     return {
         "success": True,
         "username": username,
         "credentials_configured": True,
         "_session_id": sid,
         "_session_expires": expires.isoformat(timespec="seconds"),
+        "csrf_token": csrf_token,
     }
 
 
@@ -2496,16 +2606,12 @@ def restore_version(payload: dict) -> dict:
     if not NAME_RE.match(wing) or not NAME_RE.match(room):
         raise ValueError("Stored wing/room are invalid; cannot restore automatically.")
 
-    # Restore must preserve the original provenance — added_by, source_file,
-    # filed_at all come from the snapshot, NOT from the restore action.
-    # The earlier version stamped "User"/"Restore"/<now> over the original
-    # values, which is a bug: deleting + restoring shouldn't quietly rewrite
-    # who wrote a memory or when. The new drawer_id is necessarily fresh
-    # (Chroma drops the old id on delete), but the other metadata is
-    # immutable as far as authorship goes.
+    # Restore preserves authorship/source through MemPalace's public write
+    # API. The restored copy intentionally receives a fresh filed_at and
+    # drawer_id; preserving the old timestamp previously required a direct
+    # SQLite metadata UPDATE that violated the no-raw-writes boundary.
     original_added_by = str(record.get("added_by") or "").strip() or "Direct"
     original_source = str(record.get("source_file") or "").strip() or "Direct"
-    original_filed_at = str(record.get("filed_at") or "").strip()
     result = mempalace_add_drawer(
         wing=wing,
         room=room,
@@ -2514,28 +2620,6 @@ def restore_version(payload: dict) -> dict:
         added_by=original_added_by,
     )
     new_drawer_id = result.get("drawer_id")
-    # Stamp original filed_at over the fresh one tool_add_drawer set.
-    # Direct SQL on the new row's metadata because MP exposes no hook for
-    # preserving filed_at through the write API.
-    if new_drawer_id and original_filed_at:
-        try:
-            con = sqlite3.connect(PALACE_DB)
-            con.row_factory = sqlite3.Row
-            row = con.execute(
-                "SELECT id FROM embeddings WHERE embedding_id = ?", (new_drawer_id,)
-            ).fetchone()
-            if row:
-                con.execute(
-                    "UPDATE embedding_metadata SET string_value = ? WHERE id = ? AND key = 'filed_at'",
-                    (original_filed_at, row["id"]),
-                )
-                con.commit()
-            con.close()
-        except sqlite3.Error:
-            # Filed-at preservation is best-effort — a failure here doesn't
-            # invalidate the restore itself, the user just sees a fresh
-            # timestamp instead of the original. Log via the audit entry.
-            pass
     # Mark the new drawer_id as a restoration so enrich_drawers_with_
     # updated_at clamps its updated_at = filed_at on every subsequent
     # /api/palace read. Without this the bell pulses + the "Updated"
@@ -2930,10 +3014,121 @@ def hook_settings_set_endpoint(payload: dict) -> dict:
     return mcp_call("tool_hook_settings", **kwargs)
 
 
+def resolve_bind_host(cli_host: str | None) -> str:
+    return (cli_host or os.environ.get("MEMPALACE_HOST") or "127.0.0.1").strip()
+
+
+def _is_loopback_host(host: str) -> bool:
+    normalized = host.strip().lower().rstrip(".")
+    if normalized == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(normalized).is_loopback
+    except ValueError:
+        return False
+
+
+def validate_startup_security(bind_host: str) -> None:
+    state, _ = credential_state()
+    if state == "invalid" and not AUTH_TOKEN:
+        raise RuntimeError(
+            "The credentials file is unreadable or malformed; refusing to start without MEMPALACE_TOKEN."
+        )
+    if not _is_loopback_host(bind_host) and state != "valid" and not AUTH_TOKEN:
+        raise RuntimeError(
+            "A non-loopback bind requires configured credentials or MEMPALACE_TOKEN. "
+            "Complete first-run setup on 127.0.0.1 before exposing Apricity."
+        )
+
+
+def allowed_hosts_for_bind(bind_host: str) -> set[str]:
+    allowed = {"localhost", "127.0.0.1", "::1"}
+    normalized = bind_host.strip().lower().rstrip(".")
+    if normalized not in {"", "0.0.0.0", "::"}:
+        allowed.add(normalized)
+    for value in os.environ.get("MEMPALACE_ALLOWED_HOSTS", "").split(","):
+        value = value.strip().lower().rstrip(".")
+        if value:
+            allowed.add(value)
+    return allowed
+
+
+def _host_from_authority(authority: str) -> str | None:
+    if not authority or any(char in authority for char in "\r\n\t"):
+        return None
+    try:
+        parsed = urlparse(f"//{authority}")
+        if parsed.username or parsed.password:
+            return None
+        return parsed.hostname.lower().rstrip(".") if parsed.hostname else None
+    except ValueError:
+        return None
+
+
+def host_header_allowed(authority: str, allowed_hosts: set[str]) -> bool:
+    host = _host_from_authority(authority)
+    if not host:
+        return False
+    if host in allowed_hosts:
+        return True
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return address.is_loopback or address.is_private or address.is_link_local
+
+
+def origin_matches_host(origin: str, authority: str) -> bool:
+    if not origin:
+        return True
+    if origin.strip().lower() == "null":
+        return False
+    try:
+        parsed = urlparse(origin)
+    except ValueError:
+        return False
+    if parsed.scheme not in {"http", "https"} or parsed.username or parsed.password:
+        return False
+    origin_host = parsed.hostname.lower().rstrip(".") if parsed.hostname else None
+    request_host = _host_from_authority(authority)
+    if not origin_host or origin_host != request_host:
+        return False
+    try:
+        origin_port = parsed.port
+        request_port = urlparse(f"//{authority}").port
+    except ValueError:
+        return False
+    if request_port is None:
+        return True
+    default_port = 443 if parsed.scheme == "https" else 80
+    return (origin_port or default_port) == request_port
+
+
+def validate_sync_project_dir(project_dir: str | None) -> str | None:
+    if not project_dir:
+        return None
+    if not SYNC_ROOTS:
+        raise ValueError(
+            "Explicit project_dir is disabled; configure MEMPALACE_SYNC_ROOTS first."
+        )
+    candidate = Path(project_dir).expanduser().resolve()
+    if not candidate.is_dir():
+        raise ValueError("project_dir must be an existing directory.")
+    for root in SYNC_ROOTS:
+        try:
+            candidate.relative_to(root)
+            return str(candidate)
+        except ValueError:
+            continue
+    raise ValueError("project_dir must stay within configured sync roots.")
+
+
 def sync_endpoint(payload: dict) -> dict:
     apply_changes = bool(payload.get("apply", False))
     wing = str(payload.get("wing", "")).strip() or None
-    project_dir = str(payload.get("project_dir", "")).strip() or None
+    project_dir = validate_sync_project_dir(
+        str(payload.get("project_dir", "")).strip() or None
+    )
     return mcp_call("tool_sync", apply=apply_changes, wing=wing, project_dir=project_dir)
 
 
@@ -2970,6 +3165,16 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_header("Cache-Control", "public, max-age=31536000, immutable")
         else:
             self.send_header("Cache-Control", "no-store")
+        self.send_header(
+            "Content-Security-Policy",
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data: https:; connect-src 'self'; object-src 'none'; "
+            "base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
+        )
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("Cross-Origin-Resource-Policy", "same-origin")
+        self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
         super().end_headers()
 
     def _accepts_gzip(self) -> bool:
@@ -3035,24 +3240,24 @@ class Handler(SimpleHTTPRequestHandler):
             return ""
 
     def read_json(self) -> dict:
-        length = int(self.headers.get("Content-Length", "0"))
-        if length > 20000:
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError as exc:
+            raise ValueError("Invalid Content-Length.") from exc
+        if length < 0 or length > 20000:
             raise ValueError("Request body is too large.")
         raw = self.rfile.read(length)
         return json.loads(raw.decode("utf-8") or "{}")
 
+    def _valid_auth_token(self) -> bool:
+        provided = (self.headers.get("X-Auth-Token") or "").strip()
+        return bool(AUTH_TOKEN and provided and secrets.compare_digest(provided, AUTH_TOKEN))
+
+    def _session(self) -> dict | None:
+        return validated_session(self._read_session_id())
+
     def _auth_ok(self) -> bool:
-        # 1. Static env-var token bypass (for scripts/automation).
-        if AUTH_TOKEN:
-            provided = (self.headers.get("X-Auth-Token") or "").strip()
-            if provided == AUTH_TOKEN:
-                return True
-        # 2. If no credentials are configured, the dashboard is open
-        #    so the user can perform first-time setup via Settings.
-        if not load_credentials():
-            return True
-        # 3. Session cookie.
-        return bool(validate_session(self._read_session_id()))
+        return self._valid_auth_token() or self._session() is not None
 
     def _enforce_auth(self) -> bool:
         if self._auth_ok():
@@ -3060,22 +3265,75 @@ class Handler(SimpleHTTPRequestHandler):
         self.respond_json({"success": False, "error": "Authentication required."}, status=401)
         return False
 
-    def _auth_exempt(self, path: str) -> bool:
-        return path in ("/api/login", "/api/logout", "/api/session")
+    def _enforce_host(self) -> bool:
+        allowed = getattr(
+            self.server,
+            "allowed_hosts",
+            allowed_hosts_for_bind(getattr(self.server, "bind_host", "127.0.0.1")),
+        )
+        if host_header_allowed(self.headers.get("Host") or "", allowed):
+            return True
+        self.respond_json({"success": False, "error": "Untrusted Host header."}, status=421)
+        return False
+
+    def _enforce_json_content_type(self) -> bool:
+        media_type = (self.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+        if media_type == "application/json":
+            return True
+        self.respond_json(
+            {"success": False, "error": "POST requests require Content-Type: application/json."},
+            status=415,
+        )
+        return False
+
+    def _enforce_same_origin(self) -> bool:
+        authority = self.headers.get("Host") or ""
+        origin = self.headers.get("Origin") or ""
+        referer = self.headers.get("Referer") or ""
+        candidate = origin or referer
+        if not candidate or origin_matches_host(candidate, authority):
+            return True
+        self.respond_json(
+            {"success": False, "error": "Cross-origin browser request rejected."},
+            status=403,
+        )
+        return False
+
+    def _enforce_csrf(self) -> bool:
+        if self._valid_auth_token():
+            return True
+        session = self._session()
+        provided = (self.headers.get("X-CSRF-Token") or "").strip()
+        expected = str((session or {}).get("csrf_token") or "")
+        if expected and provided and secrets.compare_digest(provided, expected):
+            return True
+        self.respond_json({"success": False, "error": "Valid CSRF token required."}, status=403)
+        return False
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
+        if not self._enforce_host():
+            return
         if parsed.path == "/health":
-            self.respond_json({"ok": True, "auth_required": bool(AUTH_TOKEN) or bool(load_credentials())})
+            state, _ = credential_state()
+            self.respond_json({
+                "ok": True,
+                "auth_required": True,
+                "credential_state": state,
+                "setup_required": state == "missing" and not AUTH_TOKEN,
+            })
             return
         if parsed.path.startswith("/api/"):
             if parsed.path == "/api/session":
-                username = validate_session(self._read_session_id())
-                creds = load_credentials()
+                session = self._session()
+                state, _ = credential_state()
                 self.respond_json({
-                    "authenticated": bool(username) or (not creds and not AUTH_TOKEN),
-                    "username": username,
-                    "credentials_required": bool(creds),
+                    "authenticated": self._auth_ok(),
+                    "username": session.get("username") if session else None,
+                    "csrf_token": session.get("csrf_token") if session else None,
+                    "credentials_required": state == "valid" or bool(AUTH_TOKEN),
+                    "credential_state": state,
+                    "setup_required": state == "missing" and not AUTH_TOKEN,
                 })
                 return
             if not self._enforce_auth():
@@ -3250,38 +3508,97 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
+        if not self._enforce_host():
+            return
+        if not self._enforce_same_origin():
+            return
+        if not self._enforce_json_content_type():
+            return
         try:
             if parsed.path == "/api/login":
+                address = self.client_address[0]
+                retry_after = login_retry_after(address)
+                if retry_after:
+                    self.respond_json(
+                        {"success": False, "error": "Too many login attempts. Try again shortly."},
+                        status=429,
+                        extra_headers=[("Retry-After", str(retry_after))],
+                    )
+                    return
                 payload = self.read_json()
                 username = str(payload.get("username", "")).strip()
                 password = str(payload.get("password", ""))
                 remember = bool(payload.get("remember", False))
-                creds = load_credentials()
+                state, creds = credential_state()
+                if state == "invalid":
+                    self.respond_json(
+                        {"success": False, "error": "Credentials configuration is invalid."},
+                        status=503,
+                    )
+                    return
                 if not creds:
-                    self.respond_json({"success": False, "error": "No credentials configured yet. Open Settings to set them."}, status=400)
+                    self.respond_json(
+                        {"success": False, "error": "No credentials configured yet. Use the first-run setup secret."},
+                        status=400,
+                    )
                     return
                 if creds.get("username") != username or not verify_password(password, creds.get("password_hash", "")):
+                    record_login_failure(address)
                     self.respond_json({"success": False, "error": "Invalid username or password."}, status=401)
                     return
-                sid, expires = create_session(username, remember)
+                clear_login_failures(address)
+                sid, expires, csrf_token = create_session(username, remember)
                 self.respond_json(
-                    {"success": True, "username": username, "expires_at": expires.isoformat(timespec="seconds"), "remember": remember},
+                    {
+                        "success": True,
+                        "username": username,
+                        "expires_at": expires.isoformat(timespec="seconds"),
+                        "remember": remember,
+                        "csrf_token": csrf_token,
+                    },
                     extra_headers=[("Set-Cookie", session_cookie_header(sid, remember))],
                 )
                 return
             if parsed.path == "/api/logout":
+                if not self._enforce_auth() or not self._enforce_csrf():
+                    return
                 delete_session(self._read_session_id())
                 self.respond_json({"success": True}, extra_headers=[("Set-Cookie", clear_session_cookie_header())])
+                return
+            if parsed.path == "/api/settings/credentials":
+                state, _ = credential_state()
+                authenticated = self._auth_ok()
+                if state != "missing" and not self._enforce_auth():
+                    return
+                if authenticated and not self._enforce_csrf():
+                    return
+                setup_token = (self.headers.get("X-Setup-Token") or "").strip()
+                result = update_credentials(
+                    self.read_json(),
+                    authenticated=authenticated,
+                    setup_token=setup_token,
+                )
+                sid = result.pop("_session_id", None)
+                result.pop("_session_expires", None)
+                extra = [("Set-Cookie", session_cookie_header(sid, remember=False))] if sid else None
+                self.respond_json(result, extra_headers=extra)
                 return
         except json.JSONDecodeError:
             self.respond_json({"success": False, "error": "Invalid JSON."}, status=400)
             return
-        if parsed.path.startswith("/api/") and not self._auth_exempt(parsed.path) and not self._enforce_auth():
+        except PermissionError as exc:
+            self.respond_json({"success": False, "error": str(exc)}, status=403)
             return
+        except (ValueError, RuntimeError) as exc:
+            self.respond_json({"success": False, "error": str(exc)}, status=400)
+            return
+        if parsed.path.startswith("/api/"):
+            if not self._enforce_auth() or not self._enforce_csrf():
+                return
         # Pull the authenticated username so write paths can attribute by
-        # account, not the generic "User". Falls back to "User" only
-        # when no auth is configured at all (first-boot edge case).
-        actor = validate_session(self._read_session_id()) or "User"
+        # account, not the generic "User". Token-only writes use a
+        # distinct actor so their audit attribution remains honest.
+        actor = validate_session(self._read_session_id()) or "Token"
         try:
             if parsed.path == "/api/drafts":
                 self.respond_json(save_draft(self.read_json()), status=201)
@@ -3346,13 +3663,6 @@ class Handler(SimpleHTTPRequestHandler):
                 updated = mark_items_seen([str(i) for i in ids if i], seen_at)
                 self.respond_json({"seen": updated})
                 return
-            if parsed.path == "/api/settings/credentials":
-                result = update_credentials(self.read_json())
-                sid = result.pop("_session_id", None)
-                result.pop("_session_expires", None)
-                extra = [("Set-Cookie", session_cookie_header(sid, remember=False))] if sid else None
-                self.respond_json(result, extra_headers=extra)
-                return
             # ---- Lab endpoints (write-side) -----------------------------------
             if parsed.path == "/api/diary":
                 self.respond_json(diary_write_endpoint(self.read_json()), status=201)
@@ -3382,14 +3692,52 @@ class Handler(SimpleHTTPRequestHandler):
             self.respond_json({"success": False, "error": str(exc)}, status=400)
 
 
-def main() -> None:
-    port = int(os.environ.get("PORT", "8765"))
-    server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
-    print(f"MemPalace dashboard: http://127.0.0.1:{port}")
-    print("Palace DB:", PALACE_DB)
-    print("Knowledge graph:", KG_DB)
-    print(f"Auth: {'enabled (X-Auth-Token required)' if AUTH_TOKEN else 'disabled (set MEMPALACE_TOKEN to enable)'}")
-    server.serve_forever()
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(description="Apricity MemPalace dashboard")
+    parser.add_argument(
+        "--host",
+        default=None,
+        help="Bind address (default: MEMPALACE_HOST or 127.0.0.1)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=int(os.environ.get("PORT", "8765")),
+        help="TCP port (default: PORT or 8765)",
+    )
+    args = parser.parse_args(argv)
+    bind_host = resolve_bind_host(args.host)
+    try:
+        validate_startup_security(bind_host)
+    except RuntimeError as exc:
+        parser.error(str(exc))
+    httpd = ThreadingHTTPServer((bind_host, args.port), Handler)
+    httpd.bind_host = bind_host
+    httpd.allowed_hosts = allowed_hosts_for_bind(bind_host)
+    actual_host, actual_port = httpd.server_address[:2]
+    display_host = f"[{actual_host}]" if ":" in actual_host else actual_host
+    print(f"Apricity: http://{display_host}:{actual_port}", flush=True)
+    print("Palace DB:", PALACE_DB, flush=True)
+    print("Knowledge graph:", KG_DB, flush=True)
+    state, _ = credential_state()
+    if state == "missing" and not AUTH_TOKEN:
+        print(
+            "First-run setup secret (required in Account settings):",
+            SETUP_TOKEN,
+            file=sys.stderr,
+            flush=True,
+        )
+    auth_modes = []
+    if state == "valid":
+        auth_modes.append("credentials")
+    if AUTH_TOKEN:
+        auth_modes.append("X-Auth-Token")
+    print(
+        "Auth:",
+        " + ".join(auth_modes) if auth_modes else "setup-secret enrollment only",
+        flush=True,
+    )
+    httpd.serve_forever()
 
 
 if __name__ == "__main__":
