@@ -267,6 +267,8 @@ const state = {
   // the panel's view kind. Mirrors the existing state.detailDirection
   // pattern used by the tunnel inspector / drawer push-pop.
   roomsPanelDirection: null,   // null | "forward" | "backward"
+  _csrfToken: "",
+  _setupRequired: false,
 };
 
 const AUTH_STORAGE_KEY = "mempalace-auth-token";
@@ -371,6 +373,8 @@ const els = {
   settingsForm: document.querySelector("#settingsForm"),
   settingsSubtitle: document.querySelector("#settingsSubtitle"),
   settingsUsername: document.querySelector("#settingsUsername"),
+  settingsSetupRow: document.querySelector("#settingsSetupRow"),
+  settingsSetupToken: document.querySelector("#settingsSetupToken"),
   settingsPassword: document.querySelector("#settingsPassword"),
   settingsPasswordConfirm: document.querySelector("#settingsPasswordConfirm"),
   settingsCurrentRow: document.querySelector("#settingsCurrentRow"),
@@ -757,6 +761,10 @@ async function fetchJson(url, options = {}) {
   const headers = { ...(options.headers || {}) };
   const token = getAuthToken();
   if (token) headers["X-Auth-Token"] = token;
+  const method = String(options.method || "GET").toUpperCase();
+  if (method !== "GET" && method !== "HEAD" && state._csrfToken && !token) {
+    headers["X-CSRF-Token"] = state._csrfToken;
+  }
   if (options.body && !headers["Content-Type"]) {
     headers["Content-Type"] = "application/json";
   }
@@ -766,9 +774,8 @@ async function fetchJson(url, options = {}) {
   } catch (error) {
     throw new Error(`Unable to reach MemPalace dashboard API: ${error.message}`);
   }
-  if (response.status === 401) {
+  if (response.status === 401 && !state._setupRequired) {
     openLoginSheet("Authentication required. Enter the dashboard token to continue.");
-    throw new Error("Authentication required.");
   }
   const text = await response.text();
   let data;
@@ -783,11 +790,21 @@ async function fetchJson(url, options = {}) {
   return data;
 }
 
-function postJson(url, payload) {
-  return fetchJson(url, { method: "POST", body: JSON.stringify(payload) });
+function postJson(url, payload, headers = {}) {
+  return fetchJson(url, { method: "POST", headers, body: JSON.stringify(payload) });
 }
 
 // ---------- markdown ----------
+function safeMarkdownHref(value) {
+  try {
+    const parsed = new URL(String(value), window.location.href);
+    const allowed = new Set(["http:", "https:", "mailto:"]);
+    return allowed.has(parsed.protocol.toLowerCase()) ? String(value) : "";
+  } catch {
+    return "";
+  }
+}
+
 // Inline markdown formatting for an already-HTML-escaped string.
 // Handles: `code`, **bold**, *italic*, _italic_, [text](url) links,
 // and bare-URL autolinks. Operates on the output of escapeHtml (which
@@ -823,9 +840,12 @@ function inlineFormat(escapedText) {
   text = text.replace(/(?<![_\w])_([^_\n]+?)_(?![\w_])/g, "<em>$1</em>");
   // Markdown links [text](url) — stashed so the URL inside the href
   // isn't re-matched by the bare-URL autolinker below.
-  text = text.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_, label, url) =>
-    stashIt(`<a href="${url}" target="_blank" rel="noopener">${label}</a>`),
-  );
+  text = text.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_, label, url) => {
+    const href = safeMarkdownHref(url);
+    return href
+      ? stashIt(`<a href="${href}" target="_blank" rel="noopener noreferrer">${label}</a>`)
+      : label;
+  });
   // Bare-URL autolink. Trailing punctuation (period, comma, paren,
   // etc.) is excluded so it doesn't become part of the link.
   // Lookbehind avoids matching URLs already inside an href attribute,
@@ -8219,6 +8239,16 @@ function setCurrentPasswordRequired(required) {
   }
 }
 
+function setSetupRequired(required) {
+  state._setupRequired = !!required;
+  if (!els.settingsSetupRow || !els.settingsSetupToken) return;
+  els.settingsSetupRow.classList.toggle("hidden", !required);
+  const divider = document.querySelector("[data-setup-divider]");
+  if (divider) divider.classList.toggle("hidden", !required);
+  if (required) els.settingsSetupToken.setAttribute("required", "");
+  else els.settingsSetupToken.removeAttribute("required");
+}
+
 function passwordsMatch() {
   return els.settingsPassword.value === els.settingsPasswordConfirm.value;
 }
@@ -8233,8 +8263,10 @@ async function openSettingsSheet() {
   els.settingsPassword.value = "";
   els.settingsPasswordConfirm.value = "";
   els.settingsCurrentPassword.value = "";
+  if (els.settingsSetupToken) els.settingsSetupToken.value = "";
   els.settingsUsername.value = "";
   setCurrentPasswordRequired(false);
+  setSetupRequired(state._setupRequired);
   setMatchErrorVisible(false);
   els.saveSettings.disabled = false;
   // Clear .is-opened so the freshly-opened sheet plays its pop-in
@@ -8270,17 +8302,25 @@ async function openSettingsSheet() {
   // opens to the same first pane regardless of where you were
   // before). If we later persist last-pane, swap "display" for the
   // stored value here.
-  setSettingsPane("display");
+  setSettingsPane(state._setupRequired ? "account" : "display");
   // Refresh server-stored preferences each time Settings opens so
   // values updated from another browser (the prefs are machine-wide)
   // show their latest state here, not the boot-time snapshot. After
   // re-sync we also re-apply the visual preferences in case another
   // device toggled them (e.g. footer info visibility, reduce motion).
-  fetchPreferences().then(() => {
-    syncPreferenceControls();
-    applyReduceMotion();
-    applyFooterInfoVisibility();
-  }).catch(() => {});
+  if (!state._setupRequired) {
+    fetchPreferences().then(() => {
+      syncPreferenceControls();
+      applyReduceMotion();
+      applyFooterInfoVisibility();
+    }).catch(() => {});
+  }
+  if (state._setupRequired) {
+    els.settingsSubtitle.textContent = "Enter the first-run setup secret printed by Apricity, then create the owner account.";
+    setSettingsStatus("The setup secret is printed in the server log.", "info");
+    focusSheetField(els.settingsUsername);
+    return;
+  }
   try {
     const data = await fetchJson("/api/settings");
     if (data.credentials_configured) {
@@ -8318,6 +8358,11 @@ async function saveSettings(event) {
     setSettingsStatus("Current password is required.", "error");
     return;
   }
+  if (state._setupRequired && (!els.settingsSetupToken || !els.settingsSetupToken.value)) {
+    setSettingsStatus("The first-run setup secret is required.", "error");
+    if (els.settingsSetupToken) els.settingsSetupToken.focus();
+    return;
+  }
   els.saveSettings.disabled = true;
   try {
     setSettingsStatus("Saving…", "info");
@@ -8328,8 +8373,13 @@ async function saveSettings(event) {
     if (currentRequired) {
       payload.current_password = els.settingsCurrentPassword.value;
     }
-    await postJson("/api/settings/credentials", payload);
-    setSettingsStatus("Credentials saved. Authentication is prepared but not yet enforced.", "success");
+    const wasSetup = state._setupRequired;
+    const headers = wasSetup ? { "X-Setup-Token": els.settingsSetupToken.value } : {};
+    const result = await postJson("/api/settings/credentials", payload, headers);
+    state._csrfToken = result.csrf_token || state._csrfToken;
+    setSetupRequired(false);
+    setSettingsStatus("Credentials saved. Authentication is now enforced.", "success");
+    if (wasSetup) await loadPalace();
     setTimeout(() => closeSettingsSheet(), 800);
   } catch (error) {
     setSettingsStatus(error.message, "error");
@@ -8533,11 +8583,12 @@ els.loginForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   setLoginStatus("Signing in…", "info");
   try {
-    await postJson("/api/login", {
+    const result = await postJson("/api/login", {
       username: els.loginUsername.value.trim(),
       password: els.loginPassword.value,
       remember: !!els.loginRemember.checked,
     });
+    state._csrfToken = result.csrf_token || "";
     setLoginStatus("");
     closeLoginSheet();
     await loadPalace();
@@ -10902,6 +10953,14 @@ document.addEventListener("visibilitychange", () => {
     sessionInfo = await sessionP;
   } catch (error) {
     document.body.innerHTML = `<main class="fatal"><h1>Unable to reach MemPalace</h1><p>${escapeHtml(error.message)}</p></main>`;
+    releaseAnim();
+    return;
+  }
+  state._csrfToken = sessionInfo.csrf_token || "";
+  setSetupRequired(!!sessionInfo.setup_required);
+  if (state._setupRequired) {
+    if (els.loginSheet) els.loginSheet.classList.add("hidden");
+    await openSettingsSheet();
     releaseAnim();
     return;
   }

@@ -27,6 +27,9 @@ jobs:
       - name: Compile-check the server module
         run: python -m py_compile mempalace_dashboard/server.py
 
+      - name: Run regression tests
+        run: python -m unittest discover -s tests
+
       - name: Import-check the package
         run: python -c "import mempalace_dashboard; print(mempalace_dashboard.__version__)"
 

@@ -28,7 +28,7 @@
 
 It is *not* a memory system of its own — it reads and writes an existing MemPalace install on the same machine, through the official `mempalace` package. Think of it as the window onto your palace.
 
-- 🏠 **Local-first.** Binds to `127.0.0.1`. Nothing leaves your machine. No telemetry. No accounts. No cloud.
+- 🏠 **Local-first.** Binds to `127.0.0.1`. No telemetry, cloud account, or memory-data upload. The optional release check can be disabled.
 - 🪶 **Zero runtime dependencies.** Pure-Python standard-library server + plain HTML / CSS / vanilla JS front-end. No `pip install`, no `npm`, no Docker, no build step.
 - 🛡️ **Safe by construction.** Every write goes through the official `mempalace` Python package. Every destructive action is snapshotted and recoverable. ETag concurrency control prevents lost edits.
 - ⚡ **Fast.** Reads the SQLite/Chroma backends directly; a localStorage cache, gzip, and serve-time minification make reloads feel instant.
@@ -136,7 +136,7 @@ It is *not* a memory system of its own — it reads and writes an existing MemPa
 - **Tools panel** — a power-user sheet that surfaces MemPalace's MCP tools: knowledge-graph query + timeline, tunnels (list, create, delete, find, follow, traverse), diary (read / write), stats, and maintenance (taxonomy, duplicate check, hook settings, sync, reconnect, AAAK spec). Hidden by default; enable it in Settings. See the [API reference](#api-reference) for the underlying endpoints.
 - **Settings** — a redesigned sheet with sidebar navigation: Display (theme, reduce-motion, relative time, title/name polishing, panel-control reveal), Notifications, remappable keyboard Shortcuts, Trash, Backup, Account, and an About pane with an update-available check.
 - **Theme** — Auto / Light / Dark, overriding or following the system preference, with your choice persisted.
-- **Auth** — optional username + password lock with PBKDF2-SHA256 hashing and HTTP-only session cookies (12-hour default, 30-day "Remember me").
+- **Auth** — fail-closed username + password protection with PBKDF2-SHA256 hashing and HTTP-only session cookies (12-hour default, 30-day "Remember me").
 
 ## Quickstart
 
@@ -155,7 +155,8 @@ cd apricity
 python3 server.py            # equivalent to `python -m mempalace_dashboard`
 ```
 
-Then open <http://127.0.0.1:8765>.
+The server prints a one-time setup secret. Open <http://127.0.0.1:8765>, go to
+**Settings → Account**, and enter that secret to create the owner account.
 
 ### Install as a command
 
@@ -176,7 +177,7 @@ There's no build step and no third-party runtime dependencies — the package is
 1. ✅ MemPalace itself is installed and you've successfully filed at least one memory through it.
 2. ✅ `~/.mempalace/palace/chroma.sqlite3` and `~/.mempalace/knowledge_graph.sqlite3` exist (or you've pointed `MEMPALACE_PALACE_DB` / `MEMPALACE_KG_DB` at where they actually live).
 3. ✅ `MEMPALACE_PYTHON_BIN` points at a Python that can `import mempalace`.
-4. ✅ You opened Apricity, clicked **Settings**, and set a username + password.
+4. ✅ You copied the setup secret from the server log, opened **Settings → Account**, and created the owner account.
 
 ## Configuration
 
@@ -185,6 +186,8 @@ All filesystem locations default to the standard MemPalace home (`~/.mempalace`)
 | Variable | Default | Purpose |
 |---|---|---|
 | `PORT` | `8765` | Port Apricity listens on. |
+| `MEMPALACE_HOST` | `127.0.0.1` | Address Apricity binds to. A non-loopback value requires configured authentication. |
+| `MEMPALACE_ALLOWED_HOSTS` | _(unset)_ | Comma-separated additional hostnames accepted by Host-header validation, such as a reverse-proxy hostname. |
 | `MEMPALACE_HOME` | `~/.mempalace` | Root for all of Apricity's data. |
 | `MEMPALACE_PALACE_DB` | `<HOME>/palace/chroma.sqlite3` | The Chroma SQLite backend. |
 | `MEMPALACE_KG_DB` | `<HOME>/knowledge_graph.sqlite3` | The knowledge-graph SQLite database. |
@@ -195,18 +198,35 @@ All filesystem locations default to the standard MemPalace home (`~/.mempalace`)
 | `MEMPALACE_PREFERENCES` | `<HOME>/dashboard-preferences.json` | Server-side UI preferences (sort, theme, notification settings). |
 | `MEMPALACE_PYTHON_BIN` | `~/.local/share/mempalace-venv/bin/python` | Python that can import `mempalace`. |
 | `MEMPALACE_TOKEN` | _(unset)_ | Optional shared-secret used by scripts via the `X-Auth-Token` header. Coexists with the cookie flow. |
+| `MEMPALACE_SETUP_TOKEN` | random per startup | Optional fixed first-run enrollment secret. Prefer the generated value printed at startup. |
+| `MEMPALACE_COOKIE_SECURE` | `false` | Set to `true` when Apricity is served over HTTPS so session cookies carry `Secure`. |
+| `MEMPALACE_SYNC_ROOTS` | _(unset)_ | Roots allowed for caller-supplied `/api/sync` project directories, separated by the platform path separator (`:` on Linux/macOS). Explicit directories are disabled when unset. |
+| `APRICITY_DISABLE_UPDATE_CHECK` | `false` | Set to `true` to disable the cached request to the GitHub releases API. |
 
 ## Securing Apricity
 
-1. Start the server, open the UI, click **Settings**.
-2. Choose a username and password (≥ 8 characters).
-3. Save — you're logged in immediately and Apricity refuses every other client until they sign in.
+1. Start the server and copy the generated setup secret from its startup log.
+2. Open the UI and go to **Settings → Account**.
+3. Enter the setup secret, choose a username and password (≥ 8 characters), and save.
 
-Credentials are stored as `pbkdf2_sha256$200000$<salt>$<hash>` and never leave the host.
+Apricity fails closed before enrollment: palace endpoints remain inaccessible, and only
+the setup-secret-protected enrollment request is accepted. Missing, malformed, or
+unreadable credential files never enable anonymous access. Credentials are stored as
+`pbkdf2_sha256$200000$<salt>$<hash>` and never leave the host.
 
-If you forget the password, delete `~/.mempalace/dashboard-credentials.json` and `~/.mempalace/dashboard-sessions.json` and restart the server — Apricity reverts to open setup mode so you can re-enroll.
+If you forget the password, delete `~/.mempalace/dashboard-credentials.json` and
+`~/.mempalace/dashboard-sessions.json`, restart the server, and re-enroll using the
+new setup secret printed at startup. This does not create an anonymous-access window.
 
-For scripted access, set `MEMPALACE_TOKEN=<some-secret>` in the environment and send it as the `X-Auth-Token` header. This coexists with the cookie flow; it does not replace it.
+For scripted access, set `MEMPALACE_TOKEN=<some-secret>` in the environment and send
+it as the `X-Auth-Token` header. The token is enforced even when no credential file
+exists and coexists with the cookie flow.
+
+To listen beyond loopback, first configure an owner account or `MEMPALACE_TOKEN`, then
+set `MEMPALACE_HOST` explicitly. Apricity refuses a non-loopback bind without one of
+those authentication mechanisms. Prefer an HTTPS reverse proxy or authenticated
+tunnel, set `MEMPALACE_ALLOWED_HOSTS` to its hostname, and enable
+`MEMPALACE_COOKIE_SECURE=true` when the browser reaches Apricity over HTTPS.
 
 ## Keyboard shortcuts
 
@@ -226,14 +246,18 @@ Single-key shortcuts only fire when you're not typing in a field. Full details i
 
 ## API reference
 
-All endpoints are JSON over HTTP. Auth is by session cookie (`mempalace_session`) or `X-Auth-Token` header when `MEMPALACE_TOKEN` is set.
+All endpoints are JSON over HTTP. Auth is by session cookie (`mempalace_session`) or
+`X-Auth-Token` header when `MEMPALACE_TOKEN` is set. Every POST requires
+`Content-Type: application/json`. Cookie-authenticated mutations also require the
+session's `X-CSRF-Token`; the bundled UI handles this automatically. Token-authenticated
+scripts do not need a CSRF token.
 
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
 | `GET`  | `/health` | open | Liveness + whether auth is active. |
 | `GET`  | `/api/session` | open | Current auth state. |
 | `POST` | `/api/login` | open | `{username, password, remember}` — issues a session cookie. |
-| `POST` | `/api/logout` | open | Clears the session. |
+| `POST` | `/api/logout` | auth | Clears the session. |
 | `GET`  | `/api/palace` | auth | Full palace snapshot (wings, drawers, triples, stats). |
 | `GET`  | `/api/search?q=…` | auth | Filtered subset of drawers + triples. |
 | `GET`  | `/api/versions` | auth | Recently deleted snapshots (powers Recently deleted). |
@@ -251,7 +275,7 @@ All endpoints are JSON over HTTP. Auth is by session cookie (`mempalace_session`
 | `POST` | `/api/facts` | auth | Add a knowledge-graph triple. |
 | `POST` | `/api/facts/invalidate` | auth | Mark a triple as ended. |
 | `GET`  | `/api/settings` | auth | Whether credentials are configured + username. |
-| `POST` | `/api/settings/credentials` | auth | Set or rotate the username + password. |
+| `POST` | `/api/settings/credentials` | setup/auth | Create credentials with the startup setup secret; rotate them with an authenticated session. |
 | `GET`  | `/api/kg/query?entity=…&direction=…&as_of=…` | auth | Query KG facts about an entity. |
 | `GET`  | `/api/kg/timeline?entity=…` | auth | Chronological view of an entity's facts. |
 | `GET`  | `/api/kg/stats` | auth | Knowledge-graph aggregate stats. |
@@ -270,7 +294,7 @@ All endpoints are JSON over HTTP. Auth is by session cookie (`mempalace_session`
 | `POST` | `/api/check-duplicate` | auth | Check whether content is a near-duplicate (`{content, threshold?}`). |
 | `GET`  | `/api/hooks` | auth | Current hook settings (silent-save, desktop-toast). |
 | `POST` | `/api/hooks` | auth | Update hook settings (`{silent_save?, desktop_toast?}`). |
-| `POST` | `/api/sync` | auth | Sync from a project tree (`{apply?, wing?, project_dir?}`). Slow — runs with a 5-minute timeout. |
+| `POST` | `/api/sync` | auth | Sync from a project tree (`{apply?, wing?, project_dir?}`). Caller-supplied directories must resolve beneath `MEMPALACE_SYNC_ROOTS`. Slow — runs with a 5-minute timeout. |
 | `POST` | `/api/reconnect` | auth | Force-reconnect the MemPalace backend. |
 
 Example — file a memory from the command line:
@@ -285,11 +309,14 @@ curl -X POST http://127.0.0.1:8765/api/memories \
 ## Safety model
 
 - **No raw DB writes.** Every mutation routes through the official `mempalace` Python package — Apricity never modifies SQLite directly.
-- **Snapshot before destruction.** Every delete (memory, room, wing, tunnel) appends a record to the versions log so the content is recoverable. Edits aren't snapshotted as history — they're protected from accidental overwrite by ETag concurrency instead.
+- **Snapshot before destruction.** Every delete (memory, room, wing, tunnel) appends a record to the versions log so the content is recoverable. Restoring recreates the memory through MemPalace with its original content, author, and source, plus a fresh ID and filing time. Edits aren't snapshotted as history — they're protected from accidental overwrite by ETag concurrency instead.
 - **ETag concurrency.** The edit form sends the content hash it was opened with; the server refuses to overwrite if it has changed.
 - **Confirmation values.** Bulk deletes and snapshot wipes require an exact-string confirmation in the request body.
-- **No plaintext secrets.** Credentials are hashed with PBKDF2-HMAC-SHA256 (200 000 iterations, 16-byte salt). Sessions are stored server-side; cookies are `HttpOnly` + `SameSite=Lax`.
-- **Loopback by default.** The server binds to `127.0.0.1`. If you put it behind a reverse proxy, terminate TLS there and keep the upstream on loopback.
+- **Fail-closed authentication.** Missing or invalid credentials do not grant palace access. First-run enrollment requires a generated setup secret, and login attempts are rate-limited.
+- **Browser request isolation.** Host-header validation blocks DNS rebinding. Mutations require same-origin requests, JSON content, and a per-session CSRF token. A restrictive Content Security Policy limits executable content.
+- **No plaintext secrets.** Credentials are hashed with PBKDF2-HMAC-SHA256 (200 000 iterations, 16-byte salt). Sessions are stored server-side; cookies are `HttpOnly` + `SameSite=Lax`, with optional `Secure` for HTTPS deployments.
+- **Constrained maintenance paths.** Explicit sync directories are disabled unless their allowed roots are configured; resolved paths and symlink targets must remain within those roots.
+- **Loopback by default.** The server binds to `127.0.0.1`. Non-loopback binding is explicit and refused without authentication. If you put it behind a reverse proxy, terminate TLS there and keep the upstream on loopback where possible.
 
 ## Architecture
 
@@ -341,7 +368,9 @@ Reads work, but every save / delete fails with a subprocess error mentioning `Mo
 rm ~/.mempalace/dashboard-credentials.json ~/.mempalace/dashboard-sessions.json
 ```
 
-Restart the server and re-enroll via Settings. This does **not** touch your memories.
+Restart the server, copy the newly generated setup secret from its log, and re-enroll
+via **Settings → Account**. This does **not** touch your memories or expose them without
+authentication.
 </details>
 
 <details>
@@ -355,7 +384,13 @@ PORT=9000 python3 server.py
 <details>
 <summary><strong>I want to reach Apricity from another machine on my LAN</strong></summary>
 
-The server binds to `127.0.0.1` deliberately. Put it behind a reverse proxy (Caddy, nginx, Tailscale Serve) that terminates TLS and forwards to the loopback port. Never expose the raw port to the public internet — Apricity is designed for a trusted host.
+The server binds to `127.0.0.1` deliberately. Prefer a reverse proxy (Caddy, nginx,
+Tailscale Serve) that terminates TLS and forwards to the loopback port. Configure its
+hostname in `MEMPALACE_ALLOWED_HOSTS` and set `MEMPALACE_COOKIE_SECURE=true`.
+
+Direct LAN binding is an explicit opt-in: configure an owner account or
+`MEMPALACE_TOKEN`, then start with `MEMPALACE_HOST=0.0.0.0`. Apricity refuses this mode
+without authentication. Never expose the raw port to the public internet.
 </details>
 
 ## FAQ
@@ -364,10 +399,14 @@ The server binds to `127.0.0.1` deliberately. Put it behind a reverse proxy (Cad
 No. Apricity is a community front-end that talks to the official `mempalace` package. The MemPalace project itself lives at [MemPalace/mempalace](https://github.com/MemPalace/mempalace).
 
 **Does it work offline?**
-Yes. The server is loopback-only and the front-end is vendored — no CDNs, no analytics, no outbound calls (except an optional, cached check of the GitHub releases API to tell you when a new Apricity version is out).
+Yes. The server is loopback-only by default and the front-end is vendored — no CDNs or
+analytics. The only optional outbound request is a cached GitHub releases check;
+disable it with `APRICITY_DISABLE_UPDATE_CHECK=true`.
 
 **Do my memories leave my machine?**
-Never. Apricity reads and writes only files under `$MEMPALACE_HOME`. There's no network code in the data path.
+Memory content is never uploaded. Apricity reads and writes the local palace; the
+optional release check sends no palace data but does contact `api.github.com`, and can
+be disabled with `APRICITY_DISABLE_UPDATE_CHECK=true`.
 
 **Can I run multiple instances on one host?**
 Yes — give each one its own `PORT` and (if you want isolated palaces) its own `MEMPALACE_HOME`.
