@@ -3111,16 +3111,21 @@ def validate_sync_project_dir(project_dir: str | None) -> str | None:
         raise ValueError(
             "Explicit project_dir is disabled; configure MEMPALACE_SYNC_ROOTS first."
         )
-    candidate = Path(project_dir).expanduser().resolve()
-    if not candidate.is_dir():
-        raise ValueError("project_dir must be an existing directory.")
+    # Normalize symlinks and parent components before performing any
+    # filesystem query. The explicit prefix check is intentionally done
+    # first so callers cannot use distinct errors as an arbitrary path-
+    # existence oracle outside the configured roots.
+    candidate = os.path.realpath(os.path.expanduser(project_dir))
     for root in SYNC_ROOTS:
-        try:
-            candidate.relative_to(root)
-            return str(candidate)
-        except ValueError:
-            continue
-    raise ValueError("project_dir must stay within configured sync roots.")
+        root_path = os.path.realpath(root)
+        root_prefix = root_path.rstrip(os.sep) + os.sep
+        if candidate == root_path or candidate.startswith(root_prefix):
+            if os.path.isdir(candidate):
+                return candidate
+            break
+    raise ValueError(
+        "project_dir must be an existing directory within configured sync roots."
+    )
 
 
 def sync_endpoint(payload: dict) -> dict:
