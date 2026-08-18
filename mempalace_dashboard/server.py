@@ -47,6 +47,18 @@ PALACE_PREVIEW_CHARS = int(os.environ.get("APRICITY_PALACE_PREVIEW_CHARS", "280"
 ROOT = Path(__file__).resolve().parent
 STATIC_DIR = ROOT / "static"
 
+# Only these text assets receive the optimized (minified/gzipped) response
+# path. Keeping the filesystem paths fixed avoids deriving a local pathname
+# from a request URL; other assets use SimpleHTTPRequestHandler's standard
+# static-file handling below.
+STATIC_TEXT_ASSETS: dict[str, tuple[Path, str]] = {
+    "app.js": (STATIC_DIR / "app.js", "text/javascript; charset=utf-8"),
+    "lab.js": (STATIC_DIR / "lab.js", "text/javascript; charset=utf-8"),
+    "prepaint.js": (STATIC_DIR / "prepaint.js", "text/javascript; charset=utf-8"),
+    "styles.css": (STATIC_DIR / "styles.css", "text/css; charset=utf-8"),
+    "index.html": (STATIC_DIR / "index.html", "text/html; charset=utf-8"),
+}
+
 # ---- serve-time JS minification (optional, graceful) -----------------------
 # app.js is ~440KB of readable source; minified it's ~175KB, which cuts the
 # browser's PARSE time (the dominant cold-load cost once assets are cached).
@@ -1716,7 +1728,14 @@ def validate_memory_payload(payload: dict) -> tuple[str, str, str, str]:
 
 
 def draft_path(draft_id: str) -> Path:
-    if not re.fullmatch(r"[0-9TZ._-]+-[A-Za-z0-9_.-]+", draft_id):
+    prefix, separator, suffix = draft_id.rpartition("-")
+    if (
+        not separator
+        or not prefix
+        or not suffix
+        or any(char not in "0123456789TZ._-" for char in prefix)
+        or any(char not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.-" for char in suffix)
+    ):
         raise ValueError("Invalid draft id.")
     return INBOX_DIR / f"{draft_id}.md"
 
@@ -3465,14 +3484,13 @@ class Handler(SimpleHTTPRequestHandler):
         """Serve a static file with JS-minify + gzip when applicable.
         Returns True if it fully handled the response, False to defer to
         the stdlib SimpleHTTPRequestHandler (binary, missing, etc.)."""
-        # Map URL → file under static/. "/" → index.html. Strip query.
+        # Map URL → one of the fixed optimized assets. This deliberately does
+        # not turn a request path into a filesystem path.
         rel = url_path.lstrip("/") or "index.html"
-        # Resolve and confine to STATIC_DIR (defense-in-depth against ..).
-        try:
-            target = (STATIC_DIR / rel).resolve()
-            target.relative_to(STATIC_DIR.resolve())
-        except (ValueError, OSError):
+        asset = STATIC_TEXT_ASSETS.get(rel)
+        if asset is None:
             return False
+        target, ctype = asset
         if not target.is_file():
             return False
         suffix = target.suffix.lower()
@@ -3480,21 +3498,12 @@ class Handler(SimpleHTTPRequestHandler):
         # (png, ico, svg, …) defers to stdlib (which handles binary + ranges).
         if suffix == ".js":
             body = get_minified_js(target)
-            ctype = "text/javascript; charset=utf-8"
         elif suffix == ".css":
             body = target.read_bytes()
-            ctype = "text/css; charset=utf-8"
         elif suffix in (".html", ".htm"):
             body = target.read_bytes()
-            ctype = "text/html; charset=utf-8"
-        elif suffix == ".json":
-            body = target.read_bytes()
-            ctype = "application/json; charset=utf-8"
-        elif suffix == ".svg":
-            body = target.read_bytes()
-            ctype = "image/svg+xml"
         else:
-            return False  # binary / unknown → stdlib
+            return False
         body, gzipped = self._maybe_gzip(body)
         self.send_response(200)
         self.send_header("Content-Type", ctype)

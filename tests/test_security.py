@@ -229,6 +229,22 @@ class SecurityTestCase(unittest.TestCase):
 
 
 class StaticSecurityTests(unittest.TestCase):
+    def test_optimized_static_assets_use_fixed_paths(self) -> None:
+        self.assertEqual(set(server.STATIC_TEXT_ASSETS), {
+            "app.js", "index.html", "lab.js", "prepaint.js", "styles.css",
+        })
+        for asset_path, _ in server.STATIC_TEXT_ASSETS.values():
+            self.assertTrue(asset_path.is_relative_to(server.STATIC_DIR))
+
+    def test_draft_path_rejects_path_and_redos_payloads(self) -> None:
+        self.assertEqual(
+            server.draft_path("20260818T161125.000000Z-safe_title"),
+            server.INBOX_DIR / "20260818T161125.000000Z-safe_title.md",
+        )
+        for draft_id in ("../outside", "safe/../outside", "_" * 20_000 + "!", "missing-suffix-"):
+            with self.assertRaises(ValueError):
+                server.draft_path(draft_id)
+
     def test_markdown_links_use_a_scheme_allowlist(self) -> None:
         source = (server.STATIC_DIR / "app.js").read_text(encoding="utf-8")
         self.assertIn("function safeMarkdownHref", source)
