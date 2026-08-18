@@ -540,7 +540,10 @@ def palace_version_token() -> str:
     palace_db = str(PALACE_DB)
     kg_db = str(KG_DB)
     parts = [
-        "palace-schema:v1",
+        # Bump when the shape or identity semantics of /api/palace changes.
+        # This makes already-open clients re-fetch rather than preserving a
+        # locally cached payload from an older dashboard implementation.
+        "palace-schema:v2",
         f"palace:{_file_signature(PALACE_DB)}",
         f"palace-wal:{_file_signature(Path(palace_db + '-wal'))}",
         f"palace-journal:{_file_signature(Path(palace_db + '-journal'))}",
@@ -3747,16 +3750,20 @@ class Handler(SimpleHTTPRequestHandler):
                 # Body: {item_ids: [...], seen_at?: iso}; legacy
                 # {drawer_ids: [...]} still works. Stamps each id with
                 # seen_at (or now) in the shared map and persists to
-                # dashboard-seen.json. Returns the updated map so the
-                # calling client doesn't have to re-fetch to confirm
-                # the write landed.
+                # dashboard-seen.json.  `include_seen: false` is for
+                # large client-side bulk acknowledgements: it avoids
+                # returning the full, potentially large map for every
+                # small batch while preserving the request-size limit.
                 body = self.read_json() or {}
                 ids = body.get("item_ids") or body.get("drawer_ids") or []
                 if not isinstance(ids, list):
                     ids = []
                 seen_at = body.get("seen_at") if isinstance(body.get("seen_at"), str) else None
                 updated = mark_items_seen([str(i) for i in ids if i], seen_at)
-                self.respond_json({"seen": updated})
+                if body.get("include_seen") is False:
+                    self.respond_json({"success": True})
+                else:
+                    self.respond_json({"seen": updated})
                 return
             # ---- Lab endpoints (write-side) -----------------------------------
             if parsed.path == "/api/diary":
