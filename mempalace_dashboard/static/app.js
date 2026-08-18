@@ -3353,7 +3353,22 @@ function renderDrawerWindow() {
     ? (totalRows - endRow) * VIRT_ROW - VIRT_CARD_GAP
     : 0;
 
-  const cardsHtml = cache.slice(startIdx, endIdx).join("");
+  // Build card HTML only when it enters the visible window. The previous
+  // implementation pre-rendered every matching card in renderDrawers(),
+  // which meant opening a 12K-drawer palace still ran cleanForPreview's
+  // regex pipeline 12K times before virtualization could save any work.
+  // Keep the positional cache so revisiting a window remains cheap, but
+  // populate it lazily: at most the viewport plus VIRT_BUFFER rows pay the
+  // formatting cost on a given frame.
+  const showWing = state.selectedWing === "all";
+  const showRoom = state.selectedRoom === "all";
+  const cardsHtml = [];
+  for (let idx = startIdx; idx < endIdx; idx += 1) {
+    if (cache[idx] === undefined) {
+      cache[idx] = drawerCardHtml(drawers[idx], showWing, showRoom);
+    }
+    cardsHtml.push(cache[idx]);
+  }
 
   list.classList.add("no-card-transition");
 
@@ -3363,7 +3378,7 @@ function renderDrawerWindow() {
   // it, breaking the row alignment. In 1-col the rule is a no-op.
   list.innerHTML =
     (topSpacer > 0 ? `<div class="virt-spacer" style="height:${topSpacer}px;grid-column:1/-1"></div>` : "")
-    + cardsHtml
+    + cardsHtml.join("")
     + (bottomSpacer > 0 ? `<div class="virt-spacer" style="height:${bottomSpacer}px;grid-column:1/-1"></div>` : "");
 
   if (state.selectedDrawerId) {
@@ -3497,16 +3512,11 @@ function renderDrawers() {
   }
 
   state._virtDrawers = drawers;
-  // Pre-compute card HTML ONCE per filter/sort pass. The heavy work
-  // (cleanForPreview regex + escapeHtml + kicker assembly per card)
-  // happens here, not on every scroll re-render. renderDrawerWindow
-  // then just slices the cache. Selection state isn't baked in (the
-  // click handler / window renderer manage `.active` via classList),
-  // so this cache only invalidates when the underlying drawer list,
-  // wing, or room scope changes.
-  const showWing = state.selectedWing === "all";
-  const showRoom = state.selectedRoom === "all";
-  state._virtCardsHtml = drawers.map((d) => drawerCardHtml(d, showWing, showRoom));
+  // Allocate a positional cache but leave entries empty until their card
+  // reaches the viewport. This is real virtualization: formatting all card
+  // markup up front still made large palaces sluggish even though only a
+  // small window was inserted into the DOM.
+  state._virtCardsHtml = new Array(drawers.length);
   // Reset the scroll-window cache so the next render isn't skipped.
   state._lastStartIdx = -1;
   state._lastEndIdx = -1;
@@ -10270,6 +10280,13 @@ function renderNotifications() {
     .filter(isBellUnseenDrawer)
     .slice()
     .sort((a, b) => (b.updated_at || "").localeCompare(a.updated_at || ""));
+  // An import can legitimately create thousands of fresh drawers at once.
+  // The badge and Mark all need the complete set, but constructing a DOM row
+  // for every one turns an otherwise virtualized palace into a multi-second
+  // main-thread stall on every render. The dropdown is an inbox preview, so
+  // render its newest entries only; the count remains exact and Mark all
+  // still clears the complete unseen set.
+  const updatesForList = updates.slice(0, 100);
   const factUpdates = suppressUpdates ? [] : ((state.palace && Array.isArray(state.palace.fact_events)) ? state.palace.fact_events : [])
     .filter(isBellUnseenFactEvent)
     .slice()
@@ -10410,7 +10427,7 @@ function renderNotifications() {
       </span>
     </button>`;
   }).join("");
-  const updateHtml = updates.map((drawer) => {
+  const updateHtml = updatesForList.map((drawer) => {
     const title = escapeHtml(cleanTitle(drawer.title || drawer.drawer_id));
     const when = escapeHtml(formatRelativeTime(drawer.updated_at) || "");
     const isUpdate = isUpdateEvent(drawer);
