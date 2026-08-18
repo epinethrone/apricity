@@ -794,6 +794,65 @@ def _row_dicts(cursor: sqlite3.Cursor) -> list[dict]:
     return [dict(row) for row in cursor.fetchall()]
 
 
+_CHUNKED_DRAWER_ID_RE = re.compile(r"^(?P<parent>.+)_chunk_(?P<ordinal>\d{6})$")
+
+
+def logical_drawer_id(drawer_id: str) -> tuple[str, int | None]:
+    """Return the public drawer id and chunk ordinal for a Chroma row.
+
+    MemPalace stores oversized drawers as ``<drawer_id>_chunk_000000``
+    records.  They are one drawer from the user's perspective: exposing the
+    physical IDs makes a delete or notification dismissal affect only one
+    fragment.  IDs that do not use the exact six-digit suffix remain normal
+    one-row drawers.
+    """
+    match = _CHUNKED_DRAWER_ID_RE.match(drawer_id)
+    if not match:
+        return drawer_id, None
+    return match.group("parent"), int(match.group("ordinal"))
+
+
+def _like_prefix(value: str) -> str:
+    """Escape a SQLite LIKE prefix while retaining its final wildcard."""
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+
+
+def _group_physical_drawers(by_id: dict[int, dict], *, light: bool) -> list[dict]:
+    """Collapse Chroma chunk rows into their parent drawer representation."""
+    groups: dict[str, list[tuple[int, int, dict]]] = {}
+    for position, item in enumerate(by_id.values()):
+        parent_id, ordinal = logical_drawer_id(item["drawer_id"])
+        # Normal rows retain their existing ordering. Chunk ordering comes
+        # from the explicit ordinal rather than Chroma's internal numeric id.
+        sort_key = ordinal if ordinal is not None else -1
+        groups.setdefault(parent_id, []).append((position, sort_key, item))
+
+    drawers: list[dict] = []
+    for parent_id, members in groups.items():
+        members.sort(key=lambda member: (member[1], member[0]))
+        first = members[0][2]
+        if len(members) == 1 and members[0][1] == -1:
+            drawers.append(first)
+            continue
+
+        # Metadata is duplicated on every physical Chroma chunk. Take it
+        # from the first logical chunk, while concatenating chunk documents
+        # exactly in their authored ordinal order.
+        item = dict(first)
+        item["drawer_id"] = parent_id
+        item["content"] = "".join(member[2].get("content", "") for member in members)
+        if light:
+            item["truncated"] = len(item["content"]) > PALACE_PREVIEW_CHARS
+            item["content"] = item["content"][:PALACE_PREVIEW_CHARS]
+        else:
+            item["etag"] = content_etag(item["content"])
+        # Light-mode titles must be derived from the same preview body the
+        # client receives; full-mode titles keep the complete body behaviour.
+        item["title"] = extract_title(item["content"], parent_id)
+        drawers.append(item)
+    return drawers
+
+
 def count_drawers() -> int:
     """Cheap COUNT(*) of drawers — used to decide light vs full payload
     without materializing every body. Returns 0 if the DB is missing or
@@ -838,8 +897,34 @@ def read_drawers(light: bool = False, ids: list[int] | None = None) -> list[dict
     id_filter = ""
     params: tuple = ()
     if ids is not None:
-        id_filter = f" and e.id in ({','.join('?' for _ in ids)})"
-        params = tuple(ids)
+        # A full-text hit on one chunk must materialize the whole logical
+        # drawer, otherwise lazy-open/search would show only its matching
+        # fragment. The numeric id branch preserves normal-row behaviour.
+        parent_ids: set[str] = set()
+        try:
+            lookup = sqlite3.connect(PALACE_DB)
+            try:
+                placeholders = ",".join("?" for _ in ids)
+                selected = lookup.execute(
+                    f"select embedding_id from embeddings where id in ({placeholders})",
+                    tuple(ids),
+                ).fetchall()
+            finally:
+                lookup.close()
+            parent_ids = {
+                parent for (embedding_id,) in selected
+                for parent, ordinal in [logical_drawer_id(str(embedding_id))]
+                if ordinal is not None
+            }
+        except sqlite3.OperationalError:
+            return []
+        clauses = [f"e.id in ({','.join('?' for _ in ids)})"]
+        query_params: list[object] = list(ids)
+        if parent_ids:
+            clauses.extend("e.embedding_id like ? escape '\\'" for _ in parent_ids)
+            query_params.extend(_like_prefix(f"{parent}_chunk_") for parent in parent_ids)
+        id_filter = " and (" + " or ".join(clauses) + ")"
+        params = tuple(query_params)
     try:
         con = sqlite3.connect(PALACE_DB)
         con.row_factory = sqlite3.Row
@@ -907,7 +992,7 @@ def read_drawers(light: bool = False, ids: list[int] | None = None) -> list[dict
             item.setdefault("truncated", item.get("truncated", False))
         else:
             item["etag"] = content_etag(item.get("content", ""))
-    drawers = list(by_id.values())
+    drawers = _group_physical_drawers(by_id, light=light)
     enrich_drawers_with_updated_at(drawers)
     return drawers
 
@@ -929,39 +1014,38 @@ def read_single_drawer(drawer_id: str) -> dict | None:
                 from embeddings e
                 join embedding_metadata em on em.id = e.id
                 where e.embedding_id = ?
+                   or e.embedding_id like ? escape '\\'
                 """,
-                (drawer_id,),
+                (drawer_id, _like_prefix(f"{drawer_id}_chunk_")),
             )
         )
         con.close()
     except sqlite3.OperationalError:
         return None
+    rows = [
+        row for row in rows
+        if logical_drawer_id(str(row["embedding_id"]))[0] == drawer_id
+    ]
     if not rows:
         return None
-    item = {
-        "id": rows[0]["id"],
-        "drawer_id": drawer_id,
-        "wing": "unknown",
-        "room": "unknown",
-        "title": "Untitled",
-        "content": "",
-        "source_file": "",
-        "filed_at": "",
-        "added_by": "",
-        "truncated": False,
-        "metadata": {},
-    }
+    by_id: dict[int, dict] = {}
     for row in rows:
+        item = by_id.setdefault(row["id"], {
+            "id": row["id"], "drawer_id": row["embedding_id"],
+            "wing": "unknown", "room": "unknown", "title": "Untitled",
+            "content": "", "source_file": "", "filed_at": "",
+            "added_by": "", "truncated": False, "metadata": {},
+        })
         key = row["key"]
         value = row["value"]
         if key == "chroma:document":
             item["content"] = value or ""
-            item["title"] = extract_title(item["content"], item["drawer_id"])
         elif key in item:
             item[key] = value or ""
         else:
             item["metadata"][key] = value
-    item["etag"] = content_etag(item.get("content", ""))
+    item = _group_physical_drawers(by_id, light=False)[0]
+    item["truncated"] = False
     enrich_drawers_with_updated_at([item])
     return item
 
