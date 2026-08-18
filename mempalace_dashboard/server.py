@@ -540,7 +540,10 @@ def palace_version_token() -> str:
     palace_db = str(PALACE_DB)
     kg_db = str(KG_DB)
     parts = [
-        "palace-schema:v1",
+        # Bump when the shape or identity semantics of /api/palace changes.
+        # This makes already-open clients re-fetch rather than preserving a
+        # locally cached payload from an older dashboard implementation.
+        "palace-schema:v2",
         f"palace:{_file_signature(PALACE_DB)}",
         f"palace-wal:{_file_signature(Path(palace_db + '-wal'))}",
         f"palace-journal:{_file_signature(Path(palace_db + '-journal'))}",
