@@ -2468,25 +2468,31 @@ function readSeenAtMap() {
   return {};
 }
 
-/** Fire-and-forget POST to persist seen-state to the server. Multiple
- * IDs in one call so bulk-seen is one round trip instead of N. The
- * response (updated map) replaces the local cache so any concurrent
- * server-side change is picked up. Errors are silent — local cache is
- * already updated optimistically; next palace poll reconciles. */
+/** Fire-and-forget POST to persist seen-state to the server.  A normal
+ * click has one id, but \"mark all\" can contain the entire palace. Keep
+ * individual requests well below the server's request-size limit instead
+ * of making that limit large enough to accept an accidental giant body.
+ * The local cache was already updated optimistically; the next palace poll
+ * remains the canonical cross-device reconciliation point. */
+const SEEN_PERSIST_BATCH_SIZE = 100;
 function _persistSeenToServer(itemIds) {
   if (!itemIds || !itemIds.length) return;
-  postJson("/api/seen", { item_ids: itemIds })
-    .then((resp) => {
-      if (resp && resp.seen && typeof resp.seen === "object") {
-        state._seenMap = resp.seen;
-        // Mirror the server-reconciled map into the local cache so the
-        // next refresh paints the canonical seen state.
-        writeSeenCache();
+  const batches = [];
+  for (let start = 0; start < itemIds.length; start += SEEN_PERSIST_BATCH_SIZE) {
+    batches.push(itemIds.slice(start, start + SEEN_PERSIST_BATCH_SIZE));
+  }
+  (async () => {
+    try {
+      // Serial requests avoid queuing a large write burst on the Pi.  Omit
+      // the whole seen map from each response: at palace scale that map is
+      // much larger than the acknowledgement itself.
+      for (const batch of batches) {
+        await postJson("/api/seen", { item_ids: batch, include_seen: false });
       }
-    })
-    .catch(() => {
-      // Network blip — next /api/palace poll refreshes the map.
-    });
+    } catch {
+      // Network blip — next /api/palace poll reconciles the map.
+    }
+  })();
 }
 
 function markDrawerSeen(drawerId) {
